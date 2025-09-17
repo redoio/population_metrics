@@ -4,62 +4,63 @@
 # and final violent / nonviolent lists.
 
 
-# File paths 
-PATHS = {
-    "demographics": "demographics.csv",         # or .xlsx
-    "current_commitments": "current_commitments.xlsx", # or .csv
-    "prior_commitments": "prior_commitments.xlsx",    # or .csv
-    "selection_criteria": "selection_criteria.xlsx",  # optional reference
+import os
+import math
+
+# Paths (profiles) 
+PROFILE = os.getenv("CFG_PROFILE", "PROD")  # "DEV" or "PROD"
+COMMIT_SHA = os.getenv("DATA_COMMIT", "main")  # pin for reproducibility
+
+PATHS_PROD = {
+    "demographics":        f"https://raw.githubusercontent.com/redoio/offenses_data/{COMMIT_SHA}/data/demographics.csv",
+    "prior_commitments":   f"https://raw.githubusercontent.com/redoio/offenses_data/{COMMIT_SHA}/data/prior_commitments.csv",
+    "current_commitments": f"https://raw.githubusercontent.com/redoio/offenses_data/{COMMIT_SHA}/data/current_commitments.xlsx",
+    # optional:
+    "offense_codes":       f"https://raw.githubusercontent.com/redoio/resentencing_data_initiative/{COMMIT_SHA}/eligibility_model/code/offense_codes.xlsx",
 }
 
-# Column names 
+PATHS_DEV = {
+    "demographics":        "/data/local/demographics.csv",
+    "prior_commitments":   "/data/local/prior_commitments.csv",
+    "current_commitments": "/data/local/current_commitments.xlsx",
+    "offense_codes":       "/data/local/offense_codes.xlsx",
+}
+
+PATHS = PATHS_PROD if PROFILE == "PROD" else PATHS_DEV
+
+#  Columns 
 COLS = {
-    "id": "cdcno",  # unique person ID
-
-    # Demographics (optional; if missing, feature skipped)
-    "age_years": None,               # e.g., "Age"
-    "dob": None,                     # optional
-    "reference_date": None,          # if computing from DOB
-
-    # Time variables (on demographics file)
-    "current_sentence": "aggregate sentence in months",  # months
-    "completed_time":  "time served in years",           # years; will be converted to months
-    "past_time":       None,                             # months; optional
-
-    # Commitments (offense text + optional pre-labeled category)
+    "id": "cdcno",
+    "age_years": None,               # set if present; else fallback/NaN
+    "dob": None,
+    "reference_date": None,
+    "current_sentence": "aggregate sentence in months",  # years/days ok; code converts to months
+    "completed_time":  "time served in years",           # unit-aware conversion
+    "past_time":       None,                             # optional
     "current_offense_text": "offense",
     "prior_offense_text":   "offense",
-    "current_category_text": "offense category",
+    "current_category_text": "offense category",         # ignored by compute script
     "prior_category_text":   "offense category",
 }
 
-# Defaults 
+#  Defaults / behavior 
 DEFAULTS = {
-    "age_fallback_years": 40.0,
+    "missing_numeric": math.nan,                      # keep missing as NaN
+    "require_time_fields": ("current_sentence", "completed_time"),
     "childhood_months": 0.0,
+    "age_min": 18.0, "age_max": 90.0,
+    "age_fallback_years": math.nan,                   # or a number if you prefer
+    "freq_min_rate": None, "freq_max_rate": None,     # set numeric bounds if you want non-1.0 outputs
     "trend_years_elapsed": 10.0,
-    "freq_min_rate": None,
-    "freq_max_rate": None,
-    "age_min": 18.0,
-    "age_max": 90.0,
 }
 
 # Offense lists 
-# Rules:
-# - If nonviolent = "rest", then any code not in violent → nonviolent
-# - If both lists explicit, then leftover → "other"
-# - If code appears in multiple categories → "clash"
-
 OFFENSE_LISTS = {
-    "violent": [
-        # examples only — fill with real codes/texts
-        "PC187", "PC211", "PC245",
-    ],
-    "nonviolent": "rest",  # OR replace with explicit list: ["PC459", "VC10851"]
+    "violent": ["187", "211", "245"],  # examples; use your codes
+    "nonviolent": "rest",              # or explicit list like ["459", "10851"]
 }
 
-# Suitability weights 
-# Only applied to features that are computed
+# Weights 
 WEIGHTS_10D = {
     "desc_nonvio_curr": 1.0,
     "desc_nonvio_past": 1.0,
@@ -67,8 +68,6 @@ WEIGHTS_10D = {
     "freq_violent": 0.0,
     "freq_total": 0.0,
     "severity_trend": 0.0,
-    "edu_general": 1.0,
-    "edu_advanced": 1.0,
-    "rehab_general": 1.0,
-    "rehab_advanced": 1.0,
+    "edu_general": 1.0, "edu_advanced": 1.0,
+    "rehab_general": 1.0, "rehab_advanced": 1.0,
 }
