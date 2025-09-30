@@ -256,22 +256,3 @@ def suitability_score_named(metrics: Dict[str, float],
     return float(sum(weights.get(k, 0.0) * float(metrics.get(k, 0.0)) for k in weights))
 
 
-#  Rules-based eligibility 
-
-def rules_based_eligibility(current_sentence_months: float, completed_months: float,
-                            min_sentence_months: float, min_completed_months: float,
-                            has_disqualifying_offense: bool) -> bool:
-    cond_len = float(current_sentence_months) >= float(min_sentence_months)
-    cond_srv = float(completed_months) >= float(min_completed_months)
-    return bool(cond_len and cond_srv and (not has_disqualifying_offense))
-
-def rules_based_eligibility_from_cfg(current_sentence_months: float, completed_months: float,
-                                     has_disqualifying_offense: bool) -> bool:
-    if CFG is None or not hasattr(CFG, "ELIGIBILITY"):
-        raise RuntimeError("config.ELIGIBILITY not available.")
-    try:
-        ms = float(CFG.ELIGIBILITY["min_sentence_months"])
-        mc = float(CFG.ELIGIBILITY["min_completed_months"])
-    except Exception as e:
-        raise RuntimeError("ELIGIBILITY thresholds missing in config.py") from e
-    return rules_based_eligibility(current_sentence_months, completed_months, ms, mc, has_disqualifying_offense)
