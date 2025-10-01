@@ -17,9 +17,9 @@ PATHS_PROD = {
 }
 
 PATHS_DEV = {
-    "demographics":        "/data/local/demographics.csv",
-    "prior_commitments":   "/data/local/prior_commitments.csv",
-    "current_commitments": "/data/local/current_commitments.xlsx",
+    "demographics":        "D:\Judge_bias_detection\milestone_2/demographics.csv",
+    "prior_commitments":   "D:\Judge_bias_detection\milestone_2/prior_commitments.csv",
+    "current_commitments": "D:\Judge_bias_detection\milestone_2/current_commitments.xlsx",
     "offense_codes":       "/data/local/offense_codes.xlsx",
 }
 
@@ -88,10 +88,10 @@ OFFENSE_LISTS = {
 }
 
 
-# Weights (name-based; n-D)
-# Only PRESENT features are used at scoring time.
+# # Metric Weights (name-based)
+# OOnly PRESENT features are used at scoring time.
 
-WEIGHTS_10D = {
+METRIC_WEIGHTS = {
     # Turn off age until data is truly available.
     "age": 0.0,
 
@@ -112,3 +112,7 @@ WEIGHTS_10D = {
     "rehab_general": 1.0,
     "rehab_advanced": 1.0,
 }
+
+# Temporary backward-compat alias (remove after downstream repos migrate)
+WEIGHTS_10D = METRIC_WEIGHTS
+
