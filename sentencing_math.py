@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-sentencing_math.py  — PURE math/metrics (no I/O)
-
+sentencing_math.py — PURE math/metrics (no I/O)
 • Policy-sensitive defaults come from the CALLER (or optional config helpers).
 • Name-based metrics; weights are dict-based, not positional.
 • STRICTLY PURE: no pandas, no file access, no CLI.
-
 Author: Taufia Hussain
 License: MIT
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional
+from math import sqrt
 
 # Optional config hook (safe)
 try:
@@ -20,9 +19,7 @@ try:
 except Exception:
     CFG = None  # type: ignore
 
-
-# Utilities 
-
+# Utilities
 def safe_div(n: float, d: float) -> float:
     """0-safe division; returns 0.0 if d is 0/None."""
     if d is None or d == 0:
@@ -42,9 +39,7 @@ def minmax_norm_scalar(x: float, lo: Optional[float], hi: Optional[float]) -> fl
         return 1.0
     return clip01((float(x) - float(lo)) / (float(hi) - float(lo)))
 
-
-#  Time Variables
-
+# Time Variables
 @dataclass
 class TimeInputs:
     current_sentence_months: float
@@ -74,9 +69,7 @@ def compute_time_vars(t: TimeInputs, months_elapsed_total: Optional[float]) -> t
         time_outside = max(0.0, float(months_elapsed_total) - time_inside - float(cm))
     return time_inside, pct_completed, time_outside
 
-
-#  Convictions (consolidated) 
-
+# Convictions (consolidated)
 @dataclass
 class Convictions:
     curr_nonviolent: float
@@ -114,9 +107,7 @@ class Convictions:
     @property
     def past_violent_prop(self) -> float: return clip01(safe_div(self.past_violent, self.past_total))
 
-
-#  Descriptive Scoring
-
+# Descriptive Scoring
 def score_desc_nonvio_curr(curr_nonviolent: float, conv_curr_total: float) -> float:
     return clip01(safe_div(curr_nonviolent, conv_curr_total))
 
@@ -126,9 +117,7 @@ def score_desc_nonvio_past(past_nonviolent: float, conv_past_total: float) -> fl
 def score_age_norm(age_value: float, age_min: Optional[float], age_max: Optional[float]) -> float:
     return minmax_norm_scalar(age_value, age_min, age_max)
 
-
-#  Frequency & Trend 
-
+# Frequency & Trend
 def score_freq_violent(conv_violent_total: float, time_outside_months: float,
                        min_rate: Optional[float], max_rate: Optional[float]) -> float:
     raw = safe_div(conv_violent_total, time_outside_months)
@@ -144,15 +133,14 @@ def score_severity_trend(curr_violent_prop: float, past_violent_prop: float, yea
     raw_delta = (past_violent_prop - curr_violent_prop) / (years_elapsed + 1.0)
     return clip01((raw_delta + 1.0) / 2.0)
 
-
-#  Rehabilitation Score
-
+# Rehabilitation Scores
 @dataclass
 class RehabInputs:
-    edu_general_credits: float = 0.0
-    edu_advanced_credits: float = 0.0
-    rehab_general_credits: float = 0.0
-    rehab_advanced_credits: float = 0.0
+    # Use None so callers/config decide whether to include or skip these metrics.
+    edu_general_credits: Optional[float] = None
+    edu_advanced_credits: Optional[float] = None
+    rehab_general_credits: Optional[float] = None
+    rehab_advanced_credits: Optional[float] = None
 
 def _per_month_inside(value: float, time_inside_months: float) -> float:
     return safe_div(value, time_inside_months)
@@ -173,15 +161,7 @@ def score_rehab_advanced(rehab_advanced_credits: float, time_inside_months: floa
                          lo: Optional[float], hi: Optional[float]) -> float:
     return minmax_norm_scalar(_per_month_inside(rehab_advanced_credits, time_inside_months), lo, hi)
 
-
-#  10 Named Metrics 
-
-DEFAULT_METRIC_NAMES = [
-    "desc_nonvio_curr", "desc_nonvio_past", "age",
-    "freq_violent", "freq_total", "severity_trend",
-    "edu_general", "edu_advanced", "rehab_general", "rehab_advanced",
-]
-
+# Vector Inputs & Builder
 @dataclass
 class VectorInputs:
     time: TimeInputs
@@ -197,6 +177,10 @@ class VectorInputs:
     rehab_norm_bounds: Optional[Dict[str, tuple[Optional[float], Optional[float]]]] = None
 
 def build_metrics_named(vin: VectorInputs) -> Dict[str, float]:
+    """
+    Build a name-keyed metric dict. Metrics are added only when inputs are valid.
+    Rehab metrics are included only when corresponding credits are not None.
+    """
     time_inside, _, time_outside = compute_time_vars(vin.time, vin.months_elapsed_total)
 
     # Descriptive
@@ -215,44 +199,70 @@ def build_metrics_named(vin: VectorInputs) -> Dict[str, float]:
                                    vin.convictions.past_violent_prop,
                                    vin.years_elapsed_for_trend)
 
-    # Rehab
-    lohi = vin.rehab_norm_bounds or {}
-    eg_lo, eg_hi = lohi.get("edu_general", (None, None))
-    ea_lo, ea_hi = lohi.get("edu_advanced", (None, None))
-    rg_lo, rg_hi = lohi.get("rehab_general", (None, None))
-    ra_lo, ra_hi = lohi.get("rehab_advanced", (None, None))
-
-    m_edu_g = score_edu_general(vin.rehab.edu_general_credits, time_inside, eg_lo, eg_hi)
-    m_edu_a = score_edu_advanced(vin.rehab.edu_advanced_credits, time_inside, ea_lo, ea_hi)
-    m_reh_g = score_rehab_general(vin.rehab.rehab_general_credits, time_inside, rg_lo, rg_hi)
-    m_reh_a = score_rehab_advanced(vin.rehab.rehab_advanced_credits, time_inside, ra_lo, ra_hi)
-
-    return {
+    out: Dict[str, float] = {
         "desc_nonvio_curr": m_desc_curr,
         "desc_nonvio_past": m_desc_past,
         "age": m_age,
         "freq_violent": m_freq_v,
         "freq_total": m_freq_t,
         "severity_trend": m_trend,
-        "edu_general": m_edu_g,
-        "edu_advanced": m_edu_a,
-        "rehab_general": m_reh_g,
-        "rehab_advanced": m_reh_a,
     }
 
+    # Rehab: add only if credits are provided (None → skip)
+    lohi = vin.rehab_norm_bounds or {}
+    def _add_if_present(key: str, credits: Optional[float]) -> None:
+        if credits is None:
+            return
+        lo, hi = lohi.get(key, (None, None))
+        if key == "edu_general":
+            out[key] = score_edu_general(credits, time_inside, lo, hi)
+        elif key == "edu_advanced":
+            out[key] = score_edu_advanced(credits, time_inside, lo, hi)
+        elif key == "rehab_general":
+            out[key] = score_rehab_general(credits, time_inside, lo, hi)
+        elif key == "rehab_advanced":
+            out[key] = score_rehab_advanced(credits, time_inside, lo, hi)
 
-#  Suitability (named weights) 
+    _add_if_present("edu_general",    vin.rehab.edu_general_credits)
+    _add_if_present("edu_advanced",   vin.rehab.edu_advanced_credits)
+    _add_if_present("rehab_general",  vin.rehab.rehab_general_credits)
+    _add_if_present("rehab_advanced", vin.rehab.rehab_advanced_credits)
 
+    return out
+
+# Suitability (name-based)
 def suitability_score_named(metrics: Dict[str, float],
                             weights: Optional[Dict[str, float]] = None) -> float:
     """
     Linear suitability score with NAME-BASED weights.
-    Only present features contribute (missing keys are ignored).
+    Only keys present in BOTH the metrics and the weights contribute.
     """
     if weights is None:
         if CFG is None or not hasattr(CFG, "METRIC_WEIGHTS"):
             raise RuntimeError("Weights not provided and config.METRIC_WEIGHTS not available.")
         weights = dict(CFG.METRIC_WEIGHTS)
-    return float(sum(weights.get(k, 0.0) * float(metrics.get(k, 0.0)) for k in weights))
 
+    keys = set(metrics.keys()) & set(weights.keys())
+    return float(sum(weights[k] * float(metrics[k]) for k in keys))
 
+# Optional alternate similarity utilities
+def _shared_items(a: Dict[str, float], b: Dict[str, float]):
+    keys = set(a.keys()) & set(b.keys())
+    return [float(a[k]) for k in keys], [float(b[k]) for k in keys]
+
+def cosine_similarity_dict(a: Dict[str, float], b: Dict[str, float]) -> float:
+    xa, xb = _shared_items(a, b)
+    if not xa:
+        return 0.0
+    dot = sum(x*y for x, y in zip(xa, xb))
+    na  = sqrt(sum(x*x for x in xa))
+    nb  = sqrt(sum(y*y for y in xb))
+    return 0.0 if na == 0 or nb == 0 else dot / (na * nb)
+
+def euclidean_similarity_dict(a: Dict[str, float], b: Dict[str, float]) -> float:
+    xa, xb = _shared_items(a, b)
+    if not xa:
+        return 0.0
+    dist = sqrt(sum((x-y)**2 for x, y in zip(xa, xb)))
+    # Map distance to similarity in (0,1]; simple monotone transform.
+    return 1.0 / (1.0 + dist)

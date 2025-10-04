@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-compute_metrics.py — config-driven, raw-data–oriented (library only)
+compute_metrics.py — parameterized, raw-data–oriented (library only)
 
 Pipeline (library functions):
-  read → parse → classify → time → features
+  read → parse → classify(offenses via config) → time → features
 Scoring/printing should be handled by a separate runner (e.g., run_compute_metrics.py).
 
 Relies on:
-  - config.py: PATHS, COLS, DEFAULTS, OFFENSE_LISTS, METRIC_WEIGHTS (or WEIGHTS_10D)
+  - config.py: PATHS, COLS, DEFAULTS, offense classification helpers, METRIC_WEIGHTS
   - sentencing_math.py: pure math helpers (imported as sm)
 
 Design notes:
@@ -23,20 +23,13 @@ Design notes:
 
 from __future__ import annotations
 from typing import Any, Dict, Optional, Tuple
-import re
-
 import numpy as np
 import pandas as pd
 from pandas.tseries.offsets import DateOffset
-
 import config as CFG
 import sentencing_math as sm
 
-
-
 # Small config helpers
-
-
 def _cfg_col(name: str) -> Optional[str]:
     """Return configured column name (or None) for a logical field."""
     return getattr(CFG, "COLS", {}).get(name)
@@ -45,11 +38,7 @@ def _cfg_default(key: str, fallback: Any) -> Any:
     """Return configured default for a key (with fallback)."""
     return getattr(CFG, "DEFAULTS", {}).get(key, fallback)
 
-
-
 # I/O (CSV/XLSX via pandas)
-
-
 def _to_raw_github_url(path: str) -> str:
     """Allow GitHub 'blob' URLs in config by converting them to 'raw' URLs."""
     if not isinstance(path, str):
@@ -77,11 +66,7 @@ def get_row_by_id(df: pd.DataFrame, id_col: str, uid: str) -> Optional[pd.Series
     sub = df.loc[df[id_col].astype(str) == str(uid)]
     return None if sub.empty else sub.iloc[0]
 
-
-
 # Parsing (NaN-honest)
-
-
 def _to_float_or_nan(x: Any) -> float:
     """Parse numeric strings safely; return NaN if missing/invalid."""
     try:
@@ -108,42 +93,7 @@ def to_months(val: Any, colname: Optional[str]) -> float:
         return x / 30.0
     return x
 
-
-
-# Offense classification
-
-
-_PENAL_RE = re.compile(r"[0-9]{2,5}(?:\.[0-9]+)?")
-
-def classify_offense(code_or_text: Any, lists: Dict[str, Any]) -> str:
-    """
-    Map offense text/code to one of: 'violent', 'nonviolent', 'other', 'clash'.
-
-    Rules:
-      • Only EXPLICIT lists are used. Anything not listed -> 'other'.
-      • If a code is in both lists → 'clash'.
-      • We DO NOT use the implicit 'rest' fallback for nonviolent.
-    """
-    if code_or_text is None or (isinstance(code_or_text, float) and pd.isna(code_or_text)):
-        return "other"
-    s = str(code_or_text).strip().lower()
-    m = _PENAL_RE.search(s)
-    norm = m.group(0) if m else s
-
-    vio = lists.get("violent") or []
-    non = lists.get("nonviolent") or []
-
-    is_v = norm in vio
-    is_n = norm in non if isinstance(non, list) else False
-
-    if is_v and is_n:
-        return "clash"
-    if is_v:
-        return "violent"
-    if isinstance(non, list) and is_n:
-        return "nonviolent"
-    return "other"
-
+# Offense counting (uses config.classify_offense)
 def count_offenses_by_category(df: pd.DataFrame, id_col: str, uid: str,
                                offense_col: str, lists: Dict[str, Any]) -> Dict[str, int]:
     """Return counts by category for all rows matching an ID."""
@@ -151,15 +101,13 @@ def count_offenses_by_category(df: pd.DataFrame, id_col: str, uid: str,
     if df is None or offense_col not in df.columns or id_col not in df.columns:
         return out
     sub = df.loc[df[id_col].astype(str) == str(uid)]
+    # Delegate classification policy to config.py
     for _, row in sub.iterrows():
-        out[classify_offense(row[offense_col], lists)] += 1
+        label = CFG.classify_offense(row[offense_col], lists)
+        out[label] += 1
     return out
 
-
-
 # Time + Age extractors
-
-
 def extract_time_inputs(demo_row: Optional[pd.Series]) -> Optional[sm.TimeInputs]:
     """
     Build sm.TimeInputs from the demographics row using configured columns.
@@ -198,11 +146,7 @@ def extract_age_years(demo_row: Optional[pd.Series]) -> Optional[float]:
         return _to_float_or_nan(demo_row[col])
     return None
 
-
-
 # Exposure helpers
-
-
 def _months_between(start: pd.Timestamp, end: pd.Timestamp) -> Optional[float]:
     """Return months between two timestamps (≈ days/30) or None if either is NaT."""
     if pd.isna(start) or pd.isna(end):
@@ -210,18 +154,14 @@ def _months_between(start: pd.Timestamp, end: pd.Timestamp) -> Optional[float]:
     days = (end - start).days
     return max(0.0, days / 30.0)
 
-
-
 # Feature computation (public API)
-
-
 def compute_features(uid: str,
                      demo: pd.DataFrame,
                      current_df: pd.DataFrame,
                      prior_df: pd.DataFrame,
                      lists: Dict[str, Any]) -> Tuple[Dict[str, float], Dict[str, Any]]:
     """
-    Compute named metrics for a single ID.
+    Compute name-keyed metrics for a single ID.
 
     Returns:
         feats: name→value dictionary (features are ONLY added when inputs are valid).
@@ -233,7 +173,7 @@ def compute_features(uid: str,
     feats: Dict[str, float] = {}
     aux:   Dict[str, Any]   = {}
 
-    #  Determine exposure window (months) 
+    # Determine exposure window (months)
     # Prefer global config; else compute per-person as months from (DOB+18y) → reference_date
     per_person_exposure = _cfg_default("months_elapsed_total", None)
     if per_person_exposure is None and row is not None:
@@ -245,7 +185,7 @@ def compute_features(uid: str,
             start = adulthood if pd.notna(adulthood) else dob  # fall back to dob if adulthood missing
             per_person_exposure = _months_between(start, ref)
 
-    #  Time 
+    # Time
     t = extract_time_inputs(row)
     if t:
         aux["time_inputs"] = t
@@ -256,7 +196,7 @@ def compute_features(uid: str,
         aux["pct_completed"] = np.nan
         aux["time_outside"]  = np.nan
 
-    #  Age (normalized) — SKIP IF MISSING 
+    # Age (normalized) — SKIP IF MISSING
     age_val = extract_age_years(row)
     if age_val is not None and not np.isnan(age_val):
         feats["age"] = sm.score_age_norm(
@@ -268,7 +208,7 @@ def compute_features(uid: str,
     else:
         aux["age_value"] = np.nan  # recorded for QA, but no 'age' feature added
 
-    #  Convictions (current & prior) 
+    # Convictions (current & prior)
     cur = count_offenses_by_category(current_df, cols["id"], uid, cols["current_offense_text"], lists)
     pri = count_offenses_by_category(prior_df,   cols["id"], uid, cols["prior_offense_text"],   lists)
     aux["counts_by_category"] = {"current": cur, "prior": pri}
@@ -278,13 +218,13 @@ def compute_features(uid: str,
         past_nonviolent=pri["nonviolent"], past_violent=pri["violent"],
     )
 
-    #  Descriptive proportions — only when denominators > 0 
+    # Descriptive proportions — only when denominators > 0
     if conv.curr_total > 0:
         feats["desc_nonvio_curr"] = sm.score_desc_nonvio_curr(conv.curr_nonviolent, conv.curr_total)
     if conv.past_total > 0:
         feats["desc_nonvio_past"] = sm.score_desc_nonvio_past(conv.past_nonviolent, conv.past_total)
 
-    #  Frequency (rates) — require time_outside > 0 AND explicit bounds 
+    # Frequency (rates) — require time_outside > 0 AND explicit bounds
     minr, maxr = _cfg_default("freq_min_rate", None), _cfg_default("freq_max_rate", None)
     time_outside = aux["time_outside"]
     have_bounds = (minr is not None and maxr is not None and float(maxr) > float(minr))
@@ -294,16 +234,18 @@ def compute_features(uid: str,
         feats["freq_total"]   = sm.score_freq_total(  conv.total,         time_outside, minr, maxr)
     # else: skip both freq_* features
 
-    #  Severity trend — only when both denominators > 0 
+    # Severity trend — only when both denominators > 0
     if conv.curr_total > 0 and conv.past_total > 0:
         yrs_elapsed = _cfg_default("trend_years_elapsed", 0.0)
         feats["severity_trend"] = sm.score_severity_trend(
             conv.curr_violent_prop, conv.past_violent_prop, yrs_elapsed
         )
     # else: skip
-
-    # Note: Rehabilitation/education metrics are not computed here.
-    # If available, construct sm.RehabInputs and sm.VectorInputs and pass them
-    # to sm.build_metrics_named(...) to obtain all 10 metrics.
+    # Rehabilitation / Education metrics:
+    # Intentionally omitted here because the public tables we load do not contain
+    # reliable program-credit fields. Per policy, we do not fabricate zeros.
+    # When a rehab credits source is provided (via config paths/columns or a join),
+    # callers should construct sm.RehabInputs and include these features; otherwise
+    # they are skipped and NOT added to the vector.
 
     return feats, aux

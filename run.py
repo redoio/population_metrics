@@ -6,7 +6,7 @@ run.py — batch runner for population-level sentencing metrics
 Reads raw tables from config.PATHS, computes metrics + scores for each person,
 and writes a flat file (CSV/Parquet).
 
-Depends on your updated modules:
+Depends on updated modules:
 - config.py
 - compute_metrics.py  (exposes: read_table, compute_features)
 - sentencing_math.py  (exposes: suitability_score_named)
@@ -18,15 +18,12 @@ Usage:
   python run.py --limit 5000              # for a quick smoke test
 """
 
-
 from __future__ import annotations
 import argparse
 import json
 from typing import Dict, Any, List, Optional
-
 import pandas as pd
 from tqdm import tqdm
-
 import config as CFG
 import sentencing_math as sm
 import compute_metrics as cm
@@ -78,7 +75,8 @@ def main():
     cur  = cm.read_table(CFG.PATHS["current_commitments"])
     pri  = cm.read_table(CFG.PATHS["prior_commitments"])
 
-    lists   = getattr(CFG, "OFFENSE_LISTS", {"violent": [], "nonviolent": "rest"})
+    # IMPORTANT: no implicit 'rest' fallback; leave policy to config.OFFENSE_POLICY
+    lists   = getattr(CFG, "OFFENSE_LISTS", {"violent": [], "nonviolent": []})
     weights = getattr(CFG, "METRIC_WEIGHTS", getattr(CFG, "WEIGHTS_10D", {}))
 
     ids = _load_ids(args.ids_csv, demo)
@@ -106,13 +104,11 @@ def main():
 
             rows.append(record)
 
-            # FIXED: use args.print_every (underscore), not args.print-every
             if args.print_every and (i % args.print_every == 0):
                 print(f"[{i}/{len(ids)}] processed …")
 
         except Exception as e:
             msg = f"{type(e).__name__}: {e}"
-            # FIXED: use args.fail_fast (underscore), not args.fail-fast
             if args.fail_fast:
                 raise
             errors.append({CFG.COLS["id"]: uid, "error": msg})
