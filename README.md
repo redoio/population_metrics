@@ -73,34 +73,33 @@ These examples walk through **exactly** what the pipeline computes for a specifi
 
 **Formulas + Numeric Plug-ins**
 - **Proportion of non-violent (current)**  
-  \( \mathrm{desc\_nonvio\_curr}=\dfrac{\mathrm{nonvio_{curr}}}{\mathrm{total_{curr}}} \)  
-  `0/0` → **SKIPPED**
+
+$$
+desc\_nonvio\_curr =
+\frac{nonvio_{curr}}{total_{curr}}
+$$
 
 - **Proportion of non-violent (past)**  
-  \( \mathrm{desc\_nonvio\_past}=\dfrac{\mathrm{nonvio_{past}}}{\mathrm{total_{past}}} \)  
-  `0/0` → **SKIPPED**
 
-- **Violent proportions (for trend)**  
-  `prop_violent_curr = NA`  
-  `prop_violent_past = NA`
+$$
+desc\_nonvio\_past =
+\frac{nonvio_{past}}{total_{past}}
+$$
 
 - **Severity trend**  
-  \( \mathrm{severity\_trend}=\left(\dfrac{\mathrm{prop_{vio,past}}-\mathrm{prop_{vio,curr}}}{\mathrm{years}+1}+1\right)/2 \)  
-  = **SKIPPED**  (`years_elapsed=10.000`)
 
-- **Frequency (raw rates per month outside)**  
-  `violent_total = 0; total_conv = 0; time_outside = 0.000`  
-  `raw_freq_violent = NA; raw_freq_total = NA`  
-  **normalized:** **SKIPPED** (requires `time_outside>0` and `freq_min_rate/max_rate`).
+$$
+\mathrm{severity\_trend}=
+\left(\frac{\mathrm{prop}_{\text{vio},\text{past}}-\mathrm{prop}_{\text{vio},\text{curr}}}{\text{years}+1}+1\right)/2
+$$
 
 - **Age (min–max)**  
-  \( \mathrm{age}=\mathrm{clip}_{[0,1]}\!\left(\dfrac{\text{age\_years}-\text{age\_min}}{\text{age\_max}-\text{age\_min}}\right) \)  
-  = **0.333**  (`raw=42.000`, `min=18.000`, `max=90.000`)
 
-**Final Metric Vector (named)**  
-Order: `desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced`  
-Values: `[SKIPPED, SKIPPED, 0.333, SKIPPED, SKIPPED, SKIPPED, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`  
-**Suitability (with METRIC_WEIGHTS):** **0.000**
+$$
+\mathrm{age} = \mathrm{clip}\left[0,1\right]\left(
+\frac{\mathrm{age\_years} - \mathrm{age\_min}}{\mathrm{age\_max} - \mathrm{age\_min}}
+\right)
+$$
 
 ### Example 2 — `2cf2a233c4`
 **Offense Lists (active for this run)**  
@@ -123,40 +122,12 @@ Values: `[SKIPPED, SKIPPED, 0.333, SKIPPED, SKIPPED, SKIPPED, SKIPPED, SKIPPED, 
 - `pct_current_completed = 97.500`  
 - `time_outside_months = 0.000`
 
-**Formulas + Numeric Plug-ins**
-- **Proportion of non-violent (current)**  
-  \( \mathrm{desc\_nonvio\_curr}=\dfrac{\mathrm{nonvio_{curr}}}{\mathrm{total_{curr}}} \)  
-  `1/1` → **1.000**
-
-- **Proportion of non-violent (past)**  
-  \( \mathrm{desc\_nonvio\_past}=\dfrac{\mathrm{nonvio_{past}}}{\mathrm{total_{past}}} \)  
-  `2/2` → **1.000**
-
-- **Violent proportions (for trend)**  
-  `prop_violent_curr = 0.000`  
-  `prop_violent_past = 0.000`
-
-- **Severity trend**  
-  \( \mathrm{severity\_trend}=\left(\dfrac{\mathrm{prop_{vio,past}}-\mathrm{prop_{vio,curr}}}{\mathrm{years}+1}+1\right)/2 \)  
-  = **0.500**  (`years_elapsed=10.000`)
-
-- **Frequency (raw rates per month outside)**  
-  `violent_total = 0; total_conv = 3; time_outside = 0.000`  
-  `raw_freq_violent = NA; raw_freq_total = NA`  
-  **normalized:** **SKIPPED** (requires `time_outside>0` and `freq_min_rate/max_rate`).
-
-- **Age:** **SKIPPED** (no age column configured or value missing)
-
-**Final Metric Vector (named)**  
-Order: `desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced`  
-Values: `[1.000, 1.000, SKIPPED, SKIPPED, SKIPPED, 0.500, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`  
-**Suitability (with METRIC_WEIGHTS):** **2.500**
+- similar formulas as above
 
 ### Re‑generate these examples
 **macOS/Linux**
 ```bash
 CFG_PROFILE=DEV python docs/make_worked_example.py --uid "2cf2a233c4" --out docs/README_worked_example_2cf2a233c4.md
-CFG_PROFILE=DEV python docs/make_worked_example.py --uid "00009164d5" --out docs/README_worked_example_00009164d5.md
 ```
 **Windows PowerShell**
 ```powershell
@@ -166,40 +137,76 @@ python docs\make_worked_example.py --uid "00009164d5" --out docs\README_worked_e
 ```
 
 ## Formulas implemented (LaTeX)
+
 - **Proportion of non‑violent (current):**  
-  \( \mathrm{desc\_nonvio\_curr}=\dfrac{\mathrm{nonvio_{curr}}}{\mathrm{total_{curr}}} \)
+
+$$
+desc\_nonvio\_curr =
+\frac{nonvio_{curr}}{total_{curr}}
+$$
 
 - **Proportion of non‑violent (past):**  
-  \( \mathrm{desc\_nonvio\_past}=\dfrac{\mathrm{nonvio_{past}}}{\mathrm{total_{past}}} \)
 
-- **Violent proportions (definitions used by trend):**  
-  \( \mathrm{prop_{vio,curr}}=\dfrac{\mathrm{vio_{curr}}}{\mathrm{total_{curr}}},\quad
-     \mathrm{prop_{vio,past}}=\dfrac{\mathrm{vio_{past}}}{\mathrm{total_{past}}} \)
+$$
+desc\_nonvio\_past =
+\frac{nonvio_{past}}{total_{past}}
+$$
 
-- **Severity trend (higher = shift toward non‑violence; clipped to \([0,1]\)):**  
-  \( \mathrm{severity\_trend}=\mathrm{clip}_{[0,1]}\!\left(
-      \dfrac{\mathrm{prop_{vio,past}}-\mathrm{prop_{vio,curr}}}{\mathrm{years}+1}\cdot\dfrac{1}{2}
-      + \dfrac{1}{2}
-    \right) \)
+- **Violent proportions:**  
+
+$$
+\mathrm{prop_{vio,curr}}=
+\frac{\mathrm{vio_{curr}}}{\mathrm{total_{curr}}},
+\quad
+\mathrm{prop_{vio,past}}=
+\frac{\mathrm{vio_{past}}}{\mathrm{total_{past}}}
+$$
+
+- **Severity trend:**  
+
+$$
+\mathrm{severity\_trend}=\mathrm{clip}_{[0,1]}\!\left(
+\frac{\mathrm{prop_{vio,past}}-\mathrm{prop_{vio,curr}}}{\mathrm{years}+1}\cdot\frac{1}{2}
++\frac{1}{2}
+\right)
+$$
 
 - **Frequency (per month outside; min–max normalize if bounds are set):**  
-  Raw rates: \( r_v=\dfrac{\text{violent\_total}}{\text{time\_outside}},\quad
-               r_t=\dfrac{\text{conv\_total}}{\text{time\_outside}} \)  
-  Normalized: \( \hat r=\mathrm{clip}_{[0,1]}\!\left(\dfrac{r-\text{min}}{\text{max}-\text{min}}\right) \)
+
+Raw rates:
+
+$$
+r_v = \frac{\mathrm{violent\_total}}{\mathrm{time\_outside}}, \quad
+r_t = \frac{\mathrm{conv\_total}}{\mathrm{time\_outside}}
+$$
+
+Normalized:
+
+$$
+\hat r=\mathrm{clip}_{[0,1]}\!\left(\frac{r-\text{min}}{\text{max}-\text{min}}\right)
+$$
 
 - **Age (min–max):**  
-  \( \mathrm{age}=\mathrm{clip}_{[0,1]}\!\left(\dfrac{\text{age\_years}-\text{age\_min}}{\text{age\_max}-\text{age\_min}}\right) \)
+
+$$
+\mathrm{age} = \mathrm{clip}\left[0,1\right]\left(
+\frac{\mathrm{age\_years} - \mathrm{age\_min}}{\mathrm{age\_max} - \mathrm{age\_min}}
+\right)
+$$
 
 - **Suitability (name‑based, present features only):**  
-  \( \text{score}=\sum_{k\in\text{present}} w_k\, m_k \)
+
+$$
+\text{score}=\sum_{k\in\text{present}} w_k\, m_k
+$$
 
 > **Notes:**  
-> • Proportion metrics are computed **only** when denominators \(>\,0\); otherwise the metric is **SKIPPED**.  
+> • Proportion metrics are computed **only** when denominators \(> 0\); otherwise the metric is **SKIPPED**.  
 > • Frequency requires **both** `time_outside > 0` **and** configured `freq_min_rate`/`freq_max_rate`.  
 > • Rehab/education are per‑month‑inside, then min–max normalized **only if** inputs and bounds are provided; otherwise **omitted**.
 
 ## Validation checklist
-- Proportion metrics are computed **only** when denominators \(>\,0\); otherwise the metric is **SKIPPED**.
+- Proportion metrics are computed **only** when denominators \(> 0\); otherwise the metric is **SKIPPED**.
 - Frequency requires **both** `time_outside > 0` **and** `freq_min_rate`/`freq_max_rate` in `config.py`.
 - Offense classification uses only `OFFENSE_LISTS`; anything unlisted → **other** (and does not contribute to denominators).
 - Suitability uses **only present (gated)** features with explicit `METRIC_WEIGHTS` (no hidden zero‑weights).
