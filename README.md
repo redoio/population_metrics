@@ -71,36 +71,6 @@ These examples walk through **exactly** what the pipeline computes for a specifi
 - `pct_current_completed = 21.290`  
 - `time_outside_months = 0.000`
 
-**Formulas + Numeric Plug-ins**
-- **Proportion of non-violent (current)**  
-
-$$
-desc\_nonvio\_curr =
-\frac{nonvio_{curr}}{total_{curr}}
-$$
-
-- **Proportion of non-violent (past)**  
-
-$$
-desc\_nonvio\_past =
-\frac{nonvio_{past}}{total_{past}}
-$$
-
-- **Severity trend**  
-
-$$
-\mathrm{severity\_trend}=
-\left(\frac{\mathrm{prop}_{\text{vio},\text{past}}-\mathrm{prop}_{\text{vio},\text{curr}}}{\text{years}+1}+1\right)/2
-$$
-
-- **Age (min–max)**  
-
-$$
-\mathrm{age} = \mathrm{clip}\left[0,1\right]\left(
-\frac{\mathrm{age\_years} - \mathrm{age\_min}}{\mathrm{age\_max} - \mathrm{age\_min}}
-\right)
-$$
-
 ### Example 2 — `2cf2a233c4`
 **Offense Lists (active for this run)**  
 - Violent: `['187', '211', '245']`  
@@ -136,69 +106,9 @@ python docs\make_worked_example.py --uid "2cf2a233c4" --out docs\README_worked_e
 python docs\make_worked_example.py --uid "00009164d5" --out docs\README_worked_example_00009164d5.md
 ```
 
-## Formulas implemented (LaTeX)
+## Formulas implemented
 
-- **Proportion of non‑violent (current):**  
-
-$$
-desc\_nonvio\_curr =
-\frac{nonvio_{curr}}{total_{curr}}
-$$
-
-- **Proportion of non‑violent (past):**  
-
-$$
-desc\_nonvio\_past =
-\frac{nonvio_{past}}{total_{past}}
-$$
-
-- **Violent proportions:**  
-
-$$
-\mathrm{prop_{vio,curr}}=
-\frac{\mathrm{vio_{curr}}}{\mathrm{total_{curr}}},
-\quad
-\mathrm{prop_{vio,past}}=
-\frac{\mathrm{vio_{past}}}{\mathrm{total_{past}}}
-$$
-
-- **Severity trend:**  
-
-$$
-\mathrm{severity\_trend}=\mathrm{clip}_{[0,1]}\!\left(
-\frac{\mathrm{prop_{vio,past}}-\mathrm{prop_{vio,curr}}}{\mathrm{years}+1}\cdot\frac{1}{2}
-+\frac{1}{2}
-\right)
-$$
-
-- **Frequency (per month outside; min–max normalize if bounds are set):**  
-
-Raw rates:
-
-$$
-r_v = \frac{\mathrm{violent\_total}}{\mathrm{time\_outside}}, \quad
-r_t = \frac{\mathrm{conv\_total}}{\mathrm{time\_outside}}
-$$
-
-Normalized:
-
-$$
-\hat r=\mathrm{clip}_{[0,1]}\!\left(\frac{r-\text{min}}{\text{max}-\text{min}}\right)
-$$
-
-- **Age (min–max):**  
-
-$$
-\mathrm{age} = \mathrm{clip}\left[0,1\right]\left(
-\frac{\mathrm{age\_years} - \mathrm{age\_min}}{\mathrm{age\_max} - \mathrm{age\_min}}
-\right)
-$$
-
-- **Suitability (name‑based, present features only):**  
-
-$$
-\text{score}=\sum_{k\in\text{present}} w_k\, m_k
-$$
+See Appendix D in https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5272917 for details.
 
 > **Notes:**  
 > • Proportion metrics are computed **only** when denominators \(> 0\); otherwise the metric is **SKIPPED**.  
