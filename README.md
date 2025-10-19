@@ -43,7 +43,8 @@ python run.py --out sample.csv --limit 500
 - `--fail-fast` : aborts on first error (default: continue and log per-ID error).
 
 ## Output
-- Main file: CSV/Parquet with one row per ID, including named metrics and `score` (suitability).
+- Main file: CSV/Parquet with one row per ID, including named metrics, `score` (suitability), and `score_out_of` (sum of absolute weights for present metrics).
+- If `--include-aux` is used, the file also includes `time_outside_months` ( \( \mathrm{out}^t_i \) ), representing total months spent outside prison across all convictions.
 - Errors (if any): `*.errors.jsonl` with `{id, error}` records.
 - Console preview prints the first rows/columns for a quick check.
 
@@ -74,6 +75,12 @@ These examples walk through **exactly** what the pipeline computes for a specifi
 - time_outside_months = 0.000
 
 **Formulas + Numeric Plug-ins**
+- **Time outside month Paper definition (Eq. B.2–15)**
+
+$$
+\mathrm{out}^t_i= td - \mathrm{in}^{(\mathrm{vio+nonvio}),t}_i - \text{childhood}.
+$$
+
 - **Proportion of non-violent (current)**
 
 $$
@@ -145,7 +152,12 @@ Order: desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severi
 Values: [0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.477, SKIPPED, SKIPPED, SKIPPED, SKIPPED]
 
 **Score:** 1.977 (out of 3.000)
-“‘Out of’ equals the sum of weights for the metrics present for this person (Σ w_k over present k).”
+“‘Out of’ equals the sum of absolute weights for the metrics present for this person " 
+
+$$
+\sum_{k \in K_{\mathrm{present}}} \lvert w_k \rvert
+$$
+
 
 **Contributing metrics:** age, desc_nonvio_curr, desc_nonvio_past, severity_trend
 
@@ -177,6 +189,12 @@ Values: [0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.477, SKIPPED, SKIPPED, SKIPPED
 - time_outside_months = 0.000
 
 **Formulas + Numeric Plug-ins**
+- **Time outside month Paper definition (Eq. B.2–15)**
+
+$$
+\mathrm{out}^t_i= td - \mathrm{in}^{(\mathrm{vio+nonvio}),t}_i - \text{childhood}.
+$$
+
 - **Proportion of non-violent (current)**
 
 $$
@@ -248,7 +266,11 @@ Values: [0.000, 0.000, 0.278, SKIPPED, SKIPPED, 0.500, SKIPPED, SKIPPED, SKIPPED
 
 
 **Score:** 0.500 (out of 3.000)
-“‘Out of’ equals the sum of weights for the metrics present for this person (Σ w_k over present k).”
+“‘Out of’ equals the sum of absolute weights for the metrics present for this person "
+
+$$
+\sum_{k \in K_{\mathrm{present}}} \lvert w_k \rvert
+$$
 
 **Contributing metrics:** age, desc_nonvio_curr, desc_nonvio_past, severity_trend
 
@@ -320,15 +342,20 @@ $$
 \mathrm{age}_{i,t_d}=\mathrm{norm}\big(\mathrm{age}^{\mathrm{raw}}_{i,t_d},k\big)
 $$
 
-- **Suitability (name‑based, present features only):**  
+- **Suitability (weighted dot product of available normalized metrics):**
 
 $$
-\mathrm{score}
-=\sum_{k \in K_{\mathrm{present}}}
-w_k \, m_k,
-\quad
+\mathrm{score}_i=\sum_{k \in K_{\mathrm{present}}} w_k m_{k,i},\qquad
 K_{\mathrm{present}} \subseteq K_{\mathrm{all}}.
 $$
+
+**Out of:**
+
+$$
+\sum_{k \in K_{\mathrm{present}}} \lvert w_k \rvert .
+$$
+
+*Direction:* \( w_k>0 \) if higher \( m_{k,i} \) increases suitability; \( w_k<0 \) if higher \( m_{k,i} \) decreases suitability.
 
 > **Notes:**  
 > • Proportion metrics are computed **only** when denominators \(> 0\); otherwise the metric is **SKIPPED**.  
@@ -355,8 +382,22 @@ ids = demo[CFG.COLS["id"]].astype(str).unique().tolist()[:3]
 rows = []
 for uid in ids:
     feats, aux = cm.compute_features(uid, demo, cur, pri, CFG.OFFENSE_LISTS)
+
+    # Compute suitability score (directional dot product)
+    present = feats.keys() & CFG.METRIC_WEIGHTS.keys()
     score = sm.suitability_score_named(feats, CFG.METRIC_WEIGHTS)
-    rows.append({CFG.COLS["id"]: uid, **feats, "score": score})
+    score_out_of = sum(abs(CFG.METRIC_WEIGHTS[k]) for k in present)
+
+    # Optional: expose time_outside if present in aux
+    time_outside = aux.get("time_outside", None)
+
+    rows.append({
+        CFG.COLS["id"]: uid,
+        **feats,
+        "score": score,
+        "score_out_of": score_out_of,
+        "time_outside": time_outside
+    })
 df = pd.DataFrame(rows)
 print(df.head())
 ```
