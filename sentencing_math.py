@@ -4,14 +4,13 @@
 sentencing_math.py — PURE math/metrics (no I/O)
 • Policy-sensitive defaults come from the CALLER (or optional config helpers).
 • Name-based metrics; weights are dict-based, not positional.
-• STRICTLY PURE: no pandas, no file access, no CLI.
+• STRICTLY PURE: no pandas, no file access, no CLI, no similarity metrics.
 Author: Taufia Hussain
 License: MIT
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional
-from math import sqrt
 
 # Optional config hook (safe)
 try:
@@ -245,24 +244,10 @@ def suitability_score_named(metrics: Dict[str, float],
     keys = set(metrics.keys()) & set(weights.keys())
     return float(sum(weights[k] * float(metrics[k]) for k in keys))
 
-# Optional alternate similarity utilities
-def _shared_items(a: Dict[str, float], b: Dict[str, float]):
-    keys = set(a.keys()) & set(b.keys())
-    return [float(a[k]) for k in keys], [float(b[k]) for k in keys]
-
-def cosine_similarity_dict(a: Dict[str, float], b: Dict[str, float]) -> float:
-    xa, xb = _shared_items(a, b)
-    if not xa:
-        return 0.0
-    dot = sum(x*y for x, y in zip(xa, xb))
-    na  = sqrt(sum(x*x for x in xa))
-    nb  = sqrt(sum(y*y for y in xb))
-    return 0.0 if na == 0 or nb == 0 else dot / (na * nb)
-
-def euclidean_similarity_dict(a: Dict[str, float], b: Dict[str, float]) -> float:
-    xa, xb = _shared_items(a, b)
-    if not xa:
-        return 0.0
-    dist = sqrt(sum((x-y)**2 for x, y in zip(xa, xb)))
-    # Map distance to similarity in (0,1]; simple monotone transform.
-    return 1.0 / (1.0 + dist)
+# Suitability out of (name-based)
+def suitability_out_of_named(feats: dict, weights: dict,
+                             ranges: dict | None = None) -> float:
+    present = feats.keys() & weights.keys()
+    # If all metrics are normalized to [0,1], this is sufficient:
+    return sum(abs(weights[k]) for k in present)
+    # If you later keep raw metrics, use ranges+direction to compute m_k^best

@@ -22,8 +22,10 @@ from __future__ import annotations
 import argparse
 import json
 from typing import Dict, Any, List, Optional
+
 import pandas as pd
 from tqdm import tqdm
+
 import config as CFG
 import sentencing_math as sm
 import compute_metrics as cm
@@ -75,7 +77,7 @@ def main():
     cur  = cm.read_table(CFG.PATHS["current_commitments"])
     pri  = cm.read_table(CFG.PATHS["prior_commitments"])
 
-    # IMPORTANT: no implicit 'rest' fallback; leave policy to config.OFFENSE_POLICY
+    # IMPORTANT: no implicit 'rest' fallback; leave policy to config.OFFENSE_LISTS
     lists   = getattr(CFG, "OFFENSE_LISTS", {"violent": [], "nonviolent": []})
     weights = getattr(CFG, "METRIC_WEIGHTS", getattr(CFG, "WEIGHTS_10D", {}))
 
@@ -94,7 +96,17 @@ def main():
             feats, aux = cm.compute_features(str(uid), demo, cur, pri, lists)
             score = sm.suitability_score_named(feats, weights)
 
-            record: Dict[str, Any] = {CFG.COLS["id"]: uid, **feats, "score": score}
+            # NEW: out-of (sum of absolute weights for present metrics)
+            present_weighted = [k for k in feats if k in weights]
+            score_out_of = sum(abs(weights[k]) for k in present_weighted)
+
+            # Build the record to export (single assignment; keep score_out_of)
+            record: Dict[str, Any] = {
+                CFG.COLS["id"]: uid,
+                **feats,
+                "score": score,
+                "score_out_of": score_out_of,
+            }
 
             if args.include_aux:
                 record["age_value"] = aux.get("age_value")
@@ -119,6 +131,7 @@ def main():
 
     out_df = pd.DataFrame(rows)
 
+    # Put ID first; keep rest as-is
     cols = out_df.columns.tolist()
     id_col = CFG.COLS["id"]
     if id_col in cols:
@@ -144,9 +157,12 @@ def main():
         print(f"Encountered {len(errors)} errors. Details → {err_path}")
 
     if not out_df.empty:
-        preview_cols = [c for c in out_df.columns if c not in {id_col}][:6]
+        # Prefer to preview id + score fields if they exist
+        preferred = [id_col, "score", "score_out_of"]
+        extra = [c for c in out_df.columns if c not in preferred][:5]
+        preview_cols = [c for c in preferred if c in out_df.columns] + extra
         print("\nPreview:")
-        print(out_df[[id_col] + preview_cols].head(10).to_string(index=False))
+        print(out_df[preview_cols].head(10).to_string(index=False))
 
 
 if __name__ == "__main__":
