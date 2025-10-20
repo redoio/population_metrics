@@ -1,4 +1,4 @@
-# Population Metrics
+# population_metrics
 Batch runner to compute **population-level sentencing metrics** and **suitability scores** for all individuals, writing a flat file (CSV/Parquet). The pipeline is strict about missing inputs: metrics are **skipped** when their prerequisites aren’t present (no fabricated values). Metrics are **named and extensible**; new metrics can be added without changing positional order.
 
 ## Repo contents
@@ -43,72 +43,319 @@ python run.py --out sample.csv --limit 500
 - `--fail-fast` : aborts on first error (default: continue and log per-ID error).
 
 ## Output
-- Main file: CSV/Parquet with one row per ID, including named metrics and `score` (suitability).
+- Main file: CSV/Parquet with one row per ID, including named metrics, `score` (suitability), and `score_out_of` (sum of absolute weights for present metrics).
+- If `--include-aux` is used, the file also includes `time_outside_months` ( \( \mathrm{out}^t_i \) ), representing total months spent outside prison across all convictions.
 - Errors (if any): `*.errors.jsonl` with `{id, error}` records.
 - Console preview prints the first rows/columns for a quick check.
 
 ## Worked examples (from scratch)
-These examples walk through **exactly** what the pipeline computes for a specific ID: counts → denominators → proportions → time pieces → trend/frequency → named vector → suitability, with the LaTeX used in code.
+These examples walk through **exactly** what the pipeline computes for a specific ID: counts → denominators → proportions → time pieces → trend/frequency → named vector → suitability. The LaTeX below **matches the paper** notation.
 
-### Example 1 — `00009164d5`
-**Offense Lists (active for this run)**  
-- Violent: `['211', '245']`  
-- Nonviolent: `['484', '10851', '459']`
+# Worked Example (REAL DATA)
 
-**Inputs**
-- Current offense rows found: **4**  
-- Prior offense rows found: **1**
-
-**Counts by Category**
-- Current: `{'violent': 0, 'nonviolent': 0, 'other': 4, 'clash': 0}`  
-- Prior:   `{'violent': 0, 'nonviolent': 0, 'other': 1, 'clash': 0}`
-
-**Time Pieces**
-- `current_sentence_months = 372.000`  
-- `completed_months = 79.200`  
-- `past_time_months = NA`  
-- `childhood_months = 0.000`  
-- `pct_current_completed = 21.290`  
-- `time_outside_months = 0.000`
-
-### Example 2 — `2cf2a233c4`
-**Offense Lists (active for this run)**  
-- Violent: `['187', '211', '245']`  
+**CDCR ID:** `00173d8423`
+**Offense Lists (active for this run)**
+- Violent: `['187', '211', '245']`
 - Nonviolent: `['459', '484', '10851']`
 
-**Inputs**
-- Current offense rows found: **1**  
-- Prior offense rows found: **13**
+## Inputs
+- Current offense rows found: **11**
+- Prior offense rows found: **6**
 
-**Counts by Category**
-- Current: `{'violent': 0, 'nonviolent': 1, 'other': 0, 'clash': 0}`  
-- Prior:   `{'violent': 0, 'nonviolent': 2, 'other': 11, 'clash': 0}`
+### Counts by Category
+- Current: {'violent': 1, 'nonviolent': 1, 'other': 9, 'clash': 0}
+- Prior:   {'violent': 0, 'nonviolent': 4, 'other': 2, 'clash': 0}
 
-**Time Pieces**
-- `current_sentence_months = 32.000`  
-- `completed_months = 31.200`  
-- `past_time_months = NA`  
-- `childhood_months = 0.000`  
-- `pct_current_completed = 97.500`  
-- `time_outside_months = 0.000`
+### Time Pieces
+- current_sentence_months = 10000.000
+- completed_months = 330.000
+- past_time_months = NA
+- childhood_months = 0.000
+- pct_current_completed = 3.300
+- time_outside_months = 0.000
 
-- similar formulas as above
+**Formulas + Numeric Plug-ins**
+- **Time outside month Paper definition (Eq. B.2–15)**
+
+$$
+\mathrm{out}^t_i= td - \mathrm{in}^{(\mathrm{vio+nonvio}),t}_i - \text{childhood}.
+$$
+
+- **Proportion of non-violent (current)**
+
+$$
+\mathrm{desc}^{\mathrm{nonvio}}_{i,t_d}=\frac{\mathrm{conv}^{\mathrm{nonvio}}_{i,t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t_d}}
+$$
+
+= 1/2 = **0.500**
+
+- **Proportion of non-violent (past)**
+
+$$
+\mathrm{desc}^{\mathrm{nonvio}}_{i,t<t_d}=\frac{\mathrm{conv}^{\mathrm{nonvio}}_{i,t<t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t<t_d}}
+$$
+
+= 4/4 = **1.000**
+
+- **Violent proportions (for trend)**
+
+$$
+\mathrm{desc}^{\mathrm{vio}}_{i,t_d}
+= \frac{\mathrm{conv}^{\mathrm{vio}}_{i,t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t_d}},
+\qquad
+\mathrm{desc}^{\mathrm{vio}}_{i,t<t_d}
+= \frac{\mathrm{conv}^{\mathrm{vio}}_{i,t<t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t<t_d}}
+$$
+
+- $\mathrm{desc}^{\mathrm{vio}}_{i,t_d}$ = 0.500
+
+- $\mathrm{desc}^{\mathrm{vio}}_{i,t<t_d}$ = 0.000
+
+- **Severity trend**
+
+$$
+severity_i^{\mathrm{trend},t_d}
+=\frac{\dfrac{\mathrm{desc}_i^{\mathrm{vio},t< t_d}-\mathrm{desc}_i^{\mathrm{vio},t_d}}{\text{years elapsed}}+1}{2},\qquad \in [0,1]
+$$
+
+= **0.477**  (years_elapsed=10.000)
+
+- **Frequency (raw rates per month outside)**
+
+$$
+\mathrm{freq}^{\mathrm{vio}}_{i,t}
+= \mathrm{norm}\left(\frac{\mathrm{conv}^{\mathrm{vio}}_{i,t}}{\mathrm{out}_{t_i}},k\right),
+\qquad
+\mathrm{freq}^{(\mathrm{vio,nonvio})}_{i,t}
+= \mathrm{norm}\left(\frac{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t}}{\mathrm{out}_{t_i}},k\right)
+$$
+
+- violent_total = 1; total_conv = 6; time_outside = 0.000
+
+- raw_freq_violent = **NA**; raw_freq_total = **NA**
+
+- normalized: **SKIPPED** (requires time_outside>0 and freq_min_rate/max_rate)
+
+- **Age (min–max)**
+
+$$
+\mathrm{age}_{i,t_d}=\mathrm{norm}\big(\mathrm{age}^{\mathrm{raw}}_{i,t_d},k\big)
+$$
+
+= **0.278**  (raw=38.000, min=18.000, max=90.000)
+“Age shown here is provided via the --age-years demo flag for illustration.”
+
+## Final Metric Vector (named)
+
+Order: desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced
+
+Values: [0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.477, SKIPPED, SKIPPED, SKIPPED, SKIPPED]
+
+**Score:** 1.977 (out of 3.000)
+“‘Out of’ equals the sum of absolute weights for the metrics present for this person " 
+
+$$
+\sum_{k \in K_{\mathrm{present}}} \lvert w_k \rvert
+$$
+
+
+**Contributing metrics:** age, desc_nonvio_curr, desc_nonvio_past, severity_trend
+
+
+
+
+### Example 2 
+**CDCR ID:** `0029029e5b`
+
+**Offense Lists (active for this run)**
+- Violent: `['187', '211', '245']`
+- Nonviolent: `['459', '484', '10851']`
+
+## Inputs
+- Current offense rows found: **1**
+- Prior offense rows found: **2**
+
+### Counts by Category
+- Current: {'violent': 1, 'nonviolent': 0, 'other': 0, 'clash': 0}
+- Prior:   {'violent': 2, 'nonviolent': 0, 'other': 0, 'clash': 0}
+
+
+### Time Pieces
+- current_sentence_months = 84.000
+- completed_months = 67.200
+- past_time_months = NA
+- childhood_months = 0.000
+- pct_current_completed = 80.000
+- time_outside_months = 0.000
+
+**Formulas + Numeric Plug-ins**
+- **Time outside month Paper definition (Eq. B.2–15)**
+
+$$
+\mathrm{out}^t_i= td - \mathrm{in}^{(\mathrm{vio+nonvio}),t}_i - \text{childhood}.
+$$
+
+- **Proportion of non-violent (current)**
+
+$$
+\mathrm{desc}^{\mathrm{nonvio}}_{i,t_d}=\frac{\mathrm{conv}^{\mathrm{nonvio}}_{i,t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t_d}}
+$$
+
+  = 0/1 = **0.000**
+
+- **Proportion of non-violent (past)**
+
+$$
+\mathrm{desc}^{\mathrm{nonvio}}_{i,t<t_d}=\frac{\mathrm{conv}^{\mathrm{nonvio}}_{i,t<t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t<t_d}}
+$$
+
+  = 0/2 = **0.000**
+
+- **Violent proportions (for trend)**
+
+$$
+\mathrm{desc}^{\mathrm{vio}}_{i,t_d}
+= \frac{\mathrm{conv}^{\mathrm{vio}}_{i,t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t_d}},
+\qquad
+\mathrm{desc}^{\mathrm{vio}}_{i,t<t_d}
+= \frac{\mathrm{conv}^{\mathrm{vio}}_{i,t<t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t<t_d}}
+$$
+
+- $\mathrm{desc}^{\mathrm{vio}}_{i,t_d}$ = 1.000
+
+- $\mathrm{desc}^{\mathrm{vio}}_{i,t<t_d}$ = 1.000
+
+- **Severity trend**
+
+$$
+severity_i^{\mathrm{trend},t_d}=\frac{\dfrac{\mathrm{desc}_i^{\mathrm{vio},t< t_d}-\mathrm{desc}_i^{\mathrm{vio},t_d}}{\mathrm{years\ elapsed}}+1}{2}
+$$
+
+  = **0.500**  (years_elapsed=10.000)
+
+- **Frequency (raw rates per month outside)**
+
+$$
+\mathrm{freq}^{\mathrm{vio}}_{i,t}
+= \mathrm{norm}\left(\frac{\mathrm{conv}^{\mathrm{vio}}_{i,t}}{\mathrm{out}_{t_i}},k\right),
+\qquad
+\mathrm{freq}^{(\mathrm{vio,nonvio})}_{i,t}
+= \mathrm{norm}\left(\frac{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t}}{\mathrm{out}_{t_i}},k\right)
+$$
+
+- violent_total = 3; total_conv = 3; time_outside = 0.000
+
+- raw_freq_violent = **NA**; raw_freq_total = **NA**
+
+- normalized: **SKIPPED** (requires time_outside>0 and freq_min_rate/max_rate)
+
+- **Age (min–max)**
+
+$$
+\mathrm{age}_{i,t_d}=\mathrm{norm}\big(\mathrm{age}^{\mathrm{raw}}_{i,t_d},k\big)
+$$
+
+  = **0.278**  (raw=38.000, min=18.000, max=90.000)
+“Age shown here is provided via the --age-years demo flag for illustration.”
+
+## Final Metric Vector (named)
+
+Order: desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced
+
+Values: [0.000, 0.000, 0.278, SKIPPED, SKIPPED, 0.500, SKIPPED, SKIPPED, SKIPPED, SKIPPED]
+
+
+**Score:** 0.500 (out of 3.000)
+“‘Out of’ equals the sum of absolute weights for the metrics present for this person "
+
+$$
+\sum_{k \in K_{\mathrm{present}}} \lvert w_k \rvert
+$$
+
+**Contributing metrics:** age, desc_nonvio_curr, desc_nonvio_past, severity_trend
 
 ### Re‑generate these examples
 **macOS/Linux**
 ```bash
-CFG_PROFILE=DEV python docs/make_worked_example.py --uid "2cf2a233c4" --out docs/README_worked_example_2cf2a233c4.md
+CFG_PROFILE=DEV python docs_1/make_worked_example.py --uid "0029029e5b" --violent "187,211,245" --nonviolent "459,484,10851" --age-years 38 --exposure-months 480 --freq-bounds "0,0.05" --out docs_1/README_worked_example_0029029e5b.md
+CFG_PROFILE=DEV python docs_1/make_worked_example.py --uid "00173d8423" --violent "187,211,245" --nonviolent "459,484,10851" --age-years 38 --exposure-months 480 --freq-bounds "0,0.05" --out docs_1/README_worked_example_00173d8423.md
 ```
 **Windows PowerShell**
 ```powershell
 $env:CFG_PROFILE="DEV"
-python docs\make_worked_example.py --uid "2cf2a233c4" --out docs\README_worked_example_2cf2a233c4.md
-python docs\make_worked_example.py --uid "00009164d5" --out docs\README_worked_example_00009164d5.md
+python docs_1\make_worked_example.py --uid "0029029e5b" --violent "187,211,245" --nonviolent "459,484,10851" --age-years 38 --exposure-months 480 --freq-bounds "0,0.05" --out "docs_1\README_worked_example_0029029e5b.md"
+python docs_1\make_worked_example.py --uid "00173d8423" --violent "187,211,245" --nonviolent "459,484,10851" --age-years 38 --exposure-months 480 --freq-bounds "0,0.05" --out "docs_1\README_worked_example_00173d8423.md"
 ```
 
-## Formulas implemented
+## Formulas implemented (LaTeX)
+- **Descriptive proportions:**
 
-See Appendix D in https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5272917 for details.
+$$
+\mathrm{desc}^{\mathrm{nonvio}}_{i,t_d}
+= \frac{\mathrm{conv}^{\mathrm{nonvio}}_{i,t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t_d}},
+\qquad
+\mathrm{desc}^{\mathrm{nonvio}}_{i,t<t_d}
+= \frac{\mathrm{conv}^{\mathrm{nonvio}}_{i,t<t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t<t_d}}
+$$
+
+- **Violent proportions (used in trend):**  
+  
+$$
+\mathrm{desc}^{\mathrm{vio}}_{i,t_d}
+= \frac{\mathrm{conv}^{\mathrm{vio}}_{i,t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t_d}},
+\qquad
+\mathrm{desc}^{\mathrm{vio}}_{i,t<t_d}
+= \frac{\mathrm{conv}^{\mathrm{vio}}_{i,t<t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t<t_d}}
+$$
+
+- **Severity trend:**  
+  
+$$
+severity_i^{\mathrm{trend},t_d}
+=\frac{\dfrac{\mathrm{desc}_i^{\mathrm{vio},t< t_d}-\mathrm{desc}_i^{\mathrm{vio},t_d}}{\text{years elapsed}}+1}{2},\qquad \in [0,1]
+$$
+
+
+- **Frequency (per month outside; min–max normalize if bounds are set):**  
+
+Normalized:
+
+$$
+\mathrm{freq}_{i}^{\mathrm{vio,score},t}
+=\frac{\left(\dfrac{\mathrm{conv}_{i}^{\mathrm{vio},t}}{\mathrm{out}_{i}^{t}}\right)-
+\min_{\forall\,k\in N}\left(\dfrac{\mathrm{conv}_{k}^{(\mathrm{vio+nonvio}),t}}{\mathrm{out}_{k}^{t}}\right)}{\max_{\forall\,k\in N}\left(\dfrac{\mathrm{conv}_{k}^{(\mathrm{vio+nonvio}),t}}{\mathrm{out}_{k}^{t}}\right)-\min_{\forall\,k\in N}\left(\dfrac{\mathrm{conv}_{k}^{(\mathrm{vio+nonvio}),t}}{\mathrm{out}_{k}^{t}}\right)
+},
+\quad \in (0,1].
+$$
+
+$$
+\mathrm{freq}_{i}^{(\mathrm{vio+nonvio}),\mathrm{score},t}
+=\mathrm{norm}\left(\frac{\mathrm{conv}_{i}^{(\mathrm{vio+nonvio}),t}}{\mathrm{out}_{i}^{t}},k
+\right),
+\quad \in (0,1].
+$$
+
+
+- **Age (min–max):** 
+
+$$
+\mathrm{age}_{i,t_d}=\mathrm{norm}\big(\mathrm{age}^{\mathrm{raw}}_{i,t_d},k\big)
+$$
+
+- **Suitability (weighted dot product of available normalized metrics):**
+
+$$
+\mathrm{score}_i=\sum_{k \in K_{\mathrm{present}}} w_k m_{k,i},\qquad
+K_{\mathrm{present}} \subseteq K_{\mathrm{all}}.
+$$
+
+**Out of:**
+
+$$
+\sum_{k \in K_{\mathrm{present}}} \lvert w_k \rvert .
+$$
+
+*Direction:* \( w_k>0 \) if higher \( m_{k,i} \) increases suitability; \( w_k<0 \) if higher \( m_{k,i} \) decreases suitability.
 
 > **Notes:**  
 > • Proportion metrics are computed **only** when denominators \(> 0\); otherwise the metric is **SKIPPED**.  
@@ -135,8 +382,22 @@ ids = demo[CFG.COLS["id"]].astype(str).unique().tolist()[:3]
 rows = []
 for uid in ids:
     feats, aux = cm.compute_features(uid, demo, cur, pri, CFG.OFFENSE_LISTS)
+
+    # Compute suitability score (directional dot product)
+    present = feats.keys() & CFG.METRIC_WEIGHTS.keys()
     score = sm.suitability_score_named(feats, CFG.METRIC_WEIGHTS)
-    rows.append({CFG.COLS["id"]: uid, **feats, "score": score})
+    score_out_of = sum(abs(CFG.METRIC_WEIGHTS[k]) for k in present)
+
+    # Optional: expose time_outside if present in aux
+    time_outside = aux.get("time_outside", None)
+
+    rows.append({
+        CFG.COLS["id"]: uid,
+        **feats,
+        "score": score,
+        "score_out_of": score_out_of,
+        "time_outside": time_outside
+    })
 df = pd.DataFrame(rows)
 print(df.head())
 ```
