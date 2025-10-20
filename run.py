@@ -22,10 +22,8 @@ from __future__ import annotations
 import argparse
 import json
 from typing import Dict, Any, List, Optional
-
 import pandas as pd
 from tqdm import tqdm
-
 import config as CFG
 import sentencing_math as sm
 import compute_metrics as cm
@@ -95,6 +93,9 @@ def main():
         try:
             feats, aux = cm.compute_features(str(uid), demo, cur, pri, lists)
             score = sm.suitability_score_named(feats, weights)
+            present_weighted = [k for k in feats if k in weights]
+            score_out_of = sum(abs(weights[k]) for k in present_weighted)   # denominator
+            record = {CFG.COLS["id"]: uid, **feats, "score": score, "score_out_of": score_out_of}
 
             # NEW: out-of (sum of absolute weights for present metrics)
             present_weighted = [k for k in feats if k in weights]

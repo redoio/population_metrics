@@ -251,3 +251,11 @@ def suitability_out_of_named(feats: dict, weights: dict,
     # If all metrics are normalized to [0,1], this is sufficient:
     return sum(abs(weights[k]) for k in present)
     # If you later keep raw metrics, use ranges+direction to compute m_k^best
+
+def suitability_score_named(feats: dict, weights: dict) -> float:
+    """Compute suitability_i = Σ  w_k * m_{k,i}  (dot product over present, normalized metrics)"""
+    score = 0.0
+    for k, w in weights.items():
+        if k in feats:
+            score += w * float(feats[k])
+    return score
