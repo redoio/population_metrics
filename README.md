@@ -151,11 +151,14 @@ Order: desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severi
 
 Values: [0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.477, SKIPPED, SKIPPED, SKIPPED, SKIPPED]
 
-**Score:** 1.977 (out of 3.000)
-“‘Out of’ equals the sum of absolute weights for the metrics present for this person " 
+**Score:** 0.659 (out of 3.000)
+ — **22.0% of maximum**
+
+“Out-of” is the dot product of the weights with the best-case metric vector:
 
 $$
-\sum_{k \in K_{\mathrm{present}}} \lvert w_k \rvert
+\mathrm{out of}_i = \sum_{k \in K_{\mathrm{present}}} w_k \, x_k^{\star}, 
+\qquad x_k^{\star} \in \{0, 1\}
 $$
 
 
@@ -265,11 +268,14 @@ Order: desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severi
 Values: [0.000, 0.000, 0.278, SKIPPED, SKIPPED, 0.500, SKIPPED, SKIPPED, SKIPPED, SKIPPED]
 
 
-**Score:** 0.500 (out of 3.000)
-“‘Out of’ equals the sum of absolute weights for the metrics present for this person "
+**Score:** 0.167 (out of 3.000)
+ — **5.6% of maximum**
+
+“Out-of” is the dot product of the weights with the best-case metric vector:
 
 $$
-\sum_{k \in K_{\mathrm{present}}} \lvert w_k \rvert
+\mathrm{out of}_i = \sum_{k \in K_{\mathrm{present}}} w_k \, x_k^{\star}, 
+\qquad x_k^{\star} \in \{0, 1\}
 $$
 
 **Contributing metrics:** age, desc_nonvio_curr, desc_nonvio_past, severity_trend
@@ -352,10 +358,22 @@ $$
 **Out of:**
 
 $$
-\sum_{k \in K_{\mathrm{present}}} \lvert w_k \rvert .
+\mathrm{out of}_i = \sum_{k \in K_{\mathrm{present}}} w_k \, x_k^{\star}, 
+\qquad x_k^{\star} \in \{0, 1\}
 $$
 
-*Direction:* \( w_k>0 \) if higher \( m_{k,i} \) increases suitability; \( w_k<0 \) if higher \( m_{k,i} \) decreases suitability.
+**Direction:**  
+
+We encode orientation using `d_k ∈ {+1, −1}`:
+
+- `d_k = +1` → higher metric value `m_{k,i}` **increases** suitability  
+- `d_k = −1` → higher metric value `m_{k,i}` **decreases** suitability  
+
+Weights `w_k ≥ 0` represent magnitudes only.  
+The numerator uses `w_k * m_{k,i}` and the “out-of” denominator uses `w_k * x_k*`,  
+where `x_k* = 1` for `d_k = +1` (positive-direction metrics)  
+and `x_k* = 0` for `d_k = −1` (negative-direction metrics).
+
 
 > **Notes:**  
 > • Proportion metrics are computed **only** when denominators \(> 0\); otherwise the metric is **SKIPPED**.  

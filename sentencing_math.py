@@ -4,15 +4,13 @@
 sentencing_math.py — PURE math/metrics (no I/O)
 • Policy-sensitive defaults come from the CALLER (or optional config helpers).
 • Name-based metrics; weights are dict-based, not positional.
-• STRICTLY PURE: no pandas, no file access, no CLI.
+• STRICTLY PURE: no pandas, no file access, no CLI, no similarity metrics.
 Author: Taufia Hussain
 License: MIT
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Dict, Optional
-from math import sqrt
-
+from typing import Mapping, Optional, Dict, Tuple
 # Optional config hook (safe)
 try:
     import config as CFG  # type: ignore
@@ -230,39 +228,98 @@ def build_metrics_named(vin: VectorInputs) -> Dict[str, float]:
 
     return out
 
-# Suitability (name-based)
-def suitability_score_named(metrics: Dict[str, float],
-                            weights: Optional[Dict[str, float]] = None) -> float:
+#  Suitability (name-based) 
+
+def _best_value_for(metric: str,
+                    directions: Mapping[str, int],
+                    overrides: Optional[Mapping[str, float]] = None) -> float:
     """
-    Linear suitability score with NAME-BASED weights.
-    Only keys present in BOTH the metrics and the weights contribute.
+    Best normalized value for a metric.
+    Default: 1 if direction +1, 0 if direction -1.
+    'overrides' can specify a custom best value (e.g., 0.85) for any metric.
+    """
+    if overrides and metric in overrides:
+        return float(overrides[metric])
+    return 1.0 if int(directions.get(metric, +1)) > 0 else 0.0
+
+
+def suitability_score_named(
+    metrics: Mapping[str, float],
+    weights: Optional[Mapping[str, float]] = None,
+    directions: Optional[Mapping[str, int]] = None,
+    return_parts: bool = False,
+) -> float | Tuple[float, float, float]:
+    """
+    Final suitability score (paper Eq. 2 + Eq. 3):
+      ratio = (Σ w_k * m_{k,i}) / (Σ w_k * x*_k)
+
+    - numerator: dot product of weights and the person's metric vector
+    - denominator ("out-of"): dot product of weights with best-case vector x*,
+      where x*_k = 1 if direction[k] > 0 else 0.
+    - Only keys present in BOTH metrics and weights contribute.
+    - If return_parts=True, returns (ratio, numerator, denominator).
+    """
+    # defaults from config if not provided
+    if weights is None:
+        if CFG is None or not hasattr(CFG, "METRIC_WEIGHTS"):
+            raise RuntimeError("Weights not provided and config.METRIC_WEIGHTS not available.")
+        weights = CFG.METRIC_WEIGHTS
+    if directions is None:
+        directions = getattr(CFG, "METRIC_DIRECTIONS", {})
+
+    keys = set(metrics) & set(weights)
+
+    # numerator: w · m
+    numerator = sum(float(weights[k]) * float(metrics[k]) for k in keys)
+
+    # denominator: w · x*  (best-case)
+    denom = 0.0
+    for k in keys:
+        x_star = 1.0 if directions.get(k, +1) > 0 else 0.0
+        denom += float(weights[k]) * x_star
+    denom = float(max(denom, 0.0))
+
+    ratio = (numerator / denom) if denom > 0 else 0.0
+    return (ratio, float(numerator), denom) if return_parts else ratio
+
+
+def suitability_out_of_named(metrics: Mapping[str, float],
+                             weights: Optional[Mapping[str, float]] = None,
+                             directions: Optional[Mapping[str, int]] = None,
+                             best_value_overrides: Optional[Mapping[str, float]] = None,
+                             *, return_breakdown: bool = False
+                             ) -> float | Tuple[float, Dict[str, float]]:
+    """
+    'Out-of' denominator per paper: out_of = sum_{k in present} w_k * x*_k,
+    where x*_k is the best-case value for metric k (Eq. 2 + Eq. 3).
+    Default best-case: 1 for +1 metrics, 0 for -1 metrics.
     """
     if weights is None:
         if CFG is None or not hasattr(CFG, "METRIC_WEIGHTS"):
             raise RuntimeError("Weights not provided and config.METRIC_WEIGHTS not available.")
-        weights = dict(CFG.METRIC_WEIGHTS)
+        weights = CFG.METRIC_WEIGHTS
+    if directions is None:
+        if CFG is None or not hasattr(CFG, "METRIC_DIRECTIONS"):
+            raise RuntimeError("Directions not provided and config.METRIC_DIRECTIONS not available.")
+        directions = CFG.METRIC_DIRECTIONS
 
-    keys = set(metrics.keys()) & set(weights.keys())
-    return float(sum(weights[k] * float(metrics[k]) for k in keys))
+    keys = set(metrics) & set(weights)
+    parts: Dict[str, float] = {}
+    out_of = 0.0
+    for k in keys:
+        x_star = _best_value_for(k, directions, overrides=best_value_overrides)
+        wk = float(weights[k])
 
-# Optional alternate similarity utilities
-def _shared_items(a: Dict[str, float], b: Dict[str, float]):
-    keys = set(a.keys()) & set(b.keys())
-    return [float(a[k]) for k in keys], [float(b[k]) for k in keys]
+        # Optional sanity check: if sign(w) conflicts with direction, warn.
+        dir_sign = 1 if int(directions.get(k, +1)) > 0 else -1
+        if wk != 0 and (wk > 0) != (dir_sign > 0):
+            # You can replace this with logging.warning(...)
+            print(f"[WARN] weight sign for '{k}' disagrees with METRIC_DIRECTIONS; "
+                  f"wk={wk}, direction={dir_sign}")
 
-def cosine_similarity_dict(a: Dict[str, float], b: Dict[str, float]) -> float:
-    xa, xb = _shared_items(a, b)
-    if not xa:
-        return 0.0
-    dot = sum(x*y for x, y in zip(xa, xb))
-    na  = sqrt(sum(x*x for x in xa))
-    nb  = sqrt(sum(y*y for y in xb))
-    return 0.0 if na == 0 or nb == 0 else dot / (na * nb)
+        term = wk * x_star
+        parts[k] = term
+        out_of += term
 
-def euclidean_similarity_dict(a: Dict[str, float], b: Dict[str, float]) -> float:
-    xa, xb = _shared_items(a, b)
-    if not xa:
-        return 0.0
-    dist = sqrt(sum((x-y)**2 for x, y in zip(xa, xb)))
-    # Map distance to similarity in (0,1]; simple monotone transform.
-    return 1.0 / (1.0 + dist)
+    out_of = max(0.0, float(out_of))   # guard against negative totals
+    return (out_of, parts) if return_breakdown else out_of
