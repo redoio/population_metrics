@@ -1,4 +1,4 @@
-# Introduction
+# population_metrics
 Batch runner to compute **population-level sentencing metrics** and **suitability scores** for all individuals, writing a flat file (CSV/Parquet). The pipeline is strict about missing inputs: metrics are **skipped** when their prerequisites aren’t present (no fabricated values). Metrics are **named and extensible**; new metrics can be added without changing positional order.
 
 ## Repo contents
@@ -74,97 +74,32 @@ These examples walk through **exactly** what the pipeline computes for a specifi
 - pct_current_completed = 3.300
 - time_outside_months = 0.000
 
-**Formulas + Numeric Plug-ins**
-- **Time outside month Paper definition (Eq. B.2–15)**
+### Calculations (refer to LaTeX section for formulas)
 
-$$
-\mathrm{out}^t_i= td - \mathrm{in}^{(\mathrm{vio+nonvio}),t}_i - \text{childhood}.
-$$
+- `desc_nonvio_curr = 1/2 = 0.500` (see Eq. **DESC-NONVIO-CURR**)
+- `desc_nonvio_past = 4/4 = 1.000` (see Eq. **DESC-NONVIO-PAST**)
 
-- **Proportion of non-violent (current)**
+- Violent proportions for trend:
+  - `desc_vio_curr = 1/2 = 0.500` (see Eq. **DESC-VIO-CURR**)
+  - `desc_vio_past = 0/4 = 0.000` (see Eq. **DESC-VIO-PAST**)
 
-$$
-\mathrm{desc}^{\mathrm{nonvio}}_{i,t_d}=\frac{\mathrm{conv}^{\mathrm{nonvio}}_{i,t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t_d}}
-$$
+- Severity trend:
+  - `severity_trend = ((0.000 − 0.500)/10.000 + 1)/2 = 0.477` (see Eq. **SEVERITY-TREND**)
 
-= 1/2 = **0.500**
+- Frequency (per month outside):
+  - `time_outside_months = 0.000` → **SKIPPED** (requires `time_outside > 0` and bounds)  
+    (see Eqs. **FREQ-VIO**, **FREQ-TOTAL**)
 
-- **Proportion of non-violent (past)**
-
-$$
-\mathrm{desc}^{\mathrm{nonvio}}_{i,t<t_d}=\frac{\mathrm{conv}^{\mathrm{nonvio}}_{i,t<t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t<t_d}}
-$$
-
-= 4/4 = **1.000**
-
-- **Violent proportions (for trend)**
-
-$$
-\mathrm{desc}^{\mathrm{vio}}_{i,t_d}
-= \frac{\mathrm{conv}^{\mathrm{vio}}_{i,t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t_d}},
-\qquad
-\mathrm{desc}^{\mathrm{vio}}_{i,t<t_d}
-= \frac{\mathrm{conv}^{\mathrm{vio}}_{i,t<t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t<t_d}}
-$$
-
-- $\mathrm{desc}^{\mathrm{vio}}_{i,t_d}$ = 0.500
-
-- $\mathrm{desc}^{\mathrm{vio}}_{i,t<t_d}$ = 0.000
-
-- **Severity trend**
-
-$$
-severity_i^{\mathrm{trend},t_d}
-=\frac{\dfrac{\mathrm{desc}_i^{\mathrm{vio},t< t_d}-\mathrm{desc}_i^{\mathrm{vio},t_d}}{\text{years elapsed}}+1}{2},\qquad \in [0,1]
-$$
-
-= **0.477**  (years_elapsed=10.000)
-
-- **Frequency (raw rates per month outside)**
-
-$$
-\mathrm{freq}^{\mathrm{vio}}_{i,t}
-= \mathrm{norm}\left(\frac{\mathrm{conv}^{\mathrm{vio}}_{i,t}}{\mathrm{out}_{t_i}},k\right),
-\qquad
-\mathrm{freq}^{(\mathrm{vio,nonvio})}_{i,t}
-= \mathrm{norm}\left(\frac{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t}}{\mathrm{out}_{t_i}},k\right)
-$$
-
-- violent_total = 1; total_conv = 6; time_outside = 0.000
-
-- raw_freq_violent = **NA**; raw_freq_total = **NA**
-
-- normalized: **SKIPPED** (requires time_outside>0 and freq_min_rate/max_rate)
-
-- **Age (min–max)**
-
-$$
-\mathrm{age}_{i,t_d}=\mathrm{norm}\big(\mathrm{age}^{\mathrm{raw}}_{i,t_d},k\big)
-$$
-
-= **0.278**  (raw=38.000, min=18.000, max=90.000)
-“Age shown here is provided via the --age-years demo flag for illustration.”
+- Age (min–max):
+  - `age_raw = 38.000`, `min = 18.000`, `max = 90.000` → `age = 0.278` (see Eq. **AGE-NORM**)
 
 ## Final Metric Vector (named)
+Order: `desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced`  
+Values: `[0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.477, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`
 
-Order: desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced
-
-Values: [0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.477, SKIPPED, SKIPPED, SKIPPED, SKIPPED]
-
-**Score:** 0.659 (out of 3.000)
- — **22.0% of maximum**
-
-“Out-of” is the dot product of the weights with the best-case metric vector:
-
-$$
-\mathrm{out of}_i = \sum_{k \in K_{\mathrm{present}}} w_k \, x_k^{\star}, 
-\qquad x_k^{\star} \in \{0, 1\}
-$$
-
-
-**Contributing metrics:** age, desc_nonvio_curr, desc_nonvio_past, severity_trend
-
-
+**Score:** `0.659` (out of `3.000`) — **22.0% of maximum**  
+“Out-of” is computed as described in Eq. **OUT-OF**.  
+**Contributing metrics:** `age, desc_nonvio_curr, desc_nonvio_past, severity_trend`
 
 
 ### Example 2 
@@ -191,94 +126,32 @@ $$
 - pct_current_completed = 80.000
 - time_outside_months = 0.000
 
-**Formulas + Numeric Plug-ins**
-- **Time outside month Paper definition (Eq. B.2–15)**
+### Calculations (refer to LaTeX section for formulas)
 
-$$
-\mathrm{out}^t_i= td - \mathrm{in}^{(\mathrm{vio+nonvio}),t}_i - \text{childhood}.
-$$
+- `desc_nonvio_curr = 0/1 = 0.000` (see Eq. **DESC-NONVIO-CURR**)
+- `desc_nonvio_past = 0/2 = 0.000` (see Eq. **DESC-NONVIO-PAST**)
 
-- **Proportion of non-violent (current)**
+- Violent proportions for trend:
+  - `desc_vio_curr = 1/1 = 1.000` (see Eq. **DESC-VIO-CURR**)
+  - `desc_vio_past = 2/2 = 1.000` (see Eq. **DESC-VIO-PAST**)
 
-$$
-\mathrm{desc}^{\mathrm{nonvio}}_{i,t_d}=\frac{\mathrm{conv}^{\mathrm{nonvio}}_{i,t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t_d}}
-$$
+- Severity trend:
+  - `severity_trend = ((1.000 − 1.000)/10.000 + 1)/2 = 0.500` (see Eq. **SEVERITY-TREND**)
 
-  = 0/1 = **0.000**
+- Frequency (per month outside):
+  - `time_outside_months = 0.000` → **SKIPPED** (requires `time_outside > 0` and bounds)  
+    (see Eqs. **FREQ-VIO**, **FREQ-TOTAL**)
 
-- **Proportion of non-violent (past)**
-
-$$
-\mathrm{desc}^{\mathrm{nonvio}}_{i,t<t_d}=\frac{\mathrm{conv}^{\mathrm{nonvio}}_{i,t<t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t<t_d}}
-$$
-
-  = 0/2 = **0.000**
-
-- **Violent proportions (for trend)**
-
-$$
-\mathrm{desc}^{\mathrm{vio}}_{i,t_d}
-= \frac{\mathrm{conv}^{\mathrm{vio}}_{i,t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t_d}},
-\qquad
-\mathrm{desc}^{\mathrm{vio}}_{i,t<t_d}
-= \frac{\mathrm{conv}^{\mathrm{vio}}_{i,t<t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t<t_d}}
-$$
-
-- $\mathrm{desc}^{\mathrm{vio}}_{i,t_d}$ = 1.000
-
-- $\mathrm{desc}^{\mathrm{vio}}_{i,t<t_d}$ = 1.000
-
-- **Severity trend**
-
-$$
-severity_i^{\mathrm{trend},t_d}=\frac{\dfrac{\mathrm{desc}_i^{\mathrm{vio},t< t_d}-\mathrm{desc}_i^{\mathrm{vio},t_d}}{\mathrm{years\ elapsed}}+1}{2}
-$$
-
-  = **0.500**  (years_elapsed=10.000)
-
-- **Frequency (raw rates per month outside)**
-
-$$
-\mathrm{freq}^{\mathrm{vio}}_{i,t}
-= \mathrm{norm}\left(\frac{\mathrm{conv}^{\mathrm{vio}}_{i,t}}{\mathrm{out}_{t_i}},k\right),
-\qquad
-\mathrm{freq}^{(\mathrm{vio,nonvio})}_{i,t}
-= \mathrm{norm}\left(\frac{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t}}{\mathrm{out}_{t_i}},k\right)
-$$
-
-- violent_total = 3; total_conv = 3; time_outside = 0.000
-
-- raw_freq_violent = **NA**; raw_freq_total = **NA**
-
-- normalized: **SKIPPED** (requires time_outside>0 and freq_min_rate/max_rate)
-
-- **Age (min–max)**
-
-$$
-\mathrm{age}_{i,t_d}=\mathrm{norm}\big(\mathrm{age}^{\mathrm{raw}}_{i,t_d},k\big)
-$$
-
-  = **0.278**  (raw=38.000, min=18.000, max=90.000)
-“Age shown here is provided via the --age-years demo flag for illustration.”
+- Age (min–max):
+  - `age_raw = 38.000`, `min = 18.000`, `max = 90.000` → `age = 0.278` (see Eq. **AGE-NORM**)
 
 ## Final Metric Vector (named)
+Order: `desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced`  
+Values: `[0.000, 0.000, 0.278, SKIPPED, SKIPPED, 0.500, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`
 
-Order: desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced
-
-Values: [0.000, 0.000, 0.278, SKIPPED, SKIPPED, 0.500, SKIPPED, SKIPPED, SKIPPED, SKIPPED]
-
-
-**Score:** 0.167 (out of 3.000)
- — **5.6% of maximum**
-
-“Out-of” is the dot product of the weights with the best-case metric vector:
-
-$$
-\mathrm{out of}_i = \sum_{k \in K_{\mathrm{present}}} w_k \, x_k^{\star}, 
-\qquad x_k^{\star} \in \{0, 1\}
-$$
-
-**Contributing metrics:** age, desc_nonvio_curr, desc_nonvio_past, severity_trend
+**Score:** `0.167` (out of `3.000`) — **5.6% of maximum**  
+“Out-of” is computed as described in Eq. **OUT-OF**.  
+**Contributing metrics:** `age, desc_nonvio_curr, desc_nonvio_past, severity_trend`
 
 ### Re‑generate these examples
 **macOS/Linux**

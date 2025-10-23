@@ -6,7 +6,6 @@ import argparse, json
 from typing import Dict, Any, List, Optional
 import pandas as pd
 from tqdm import tqdm
-
 import config as CFG
 import sentencing_math as sm
 import compute_metrics as cm
@@ -44,14 +43,17 @@ def main():
     ap.add_argument("--fail-fast", action="store_true")
     args = ap.parse_args()
 
+    # Load source tables
     demo = cm.read_table(CFG.PATHS["demographics"])
     cur  = cm.read_table(CFG.PATHS["current_commitments"])
     pri  = cm.read_table(CFG.PATHS["prior_commitments"])
 
-    lists      = getattr(CFG, "OFFENSE_LISTS", {"violent": [], "nonviolent": []})
-    weights    = getattr(CFG, "METRIC_WEIGHTS", getattr(CFG, "WEIGHTS_10D", {}))
-    directions = getattr(CFG, "METRIC_DIRECTIONS", {})
+    # Policy knobs
+    lists       = getattr(CFG, "OFFENSE_LISTS", {"violent": [], "nonviolent": []})
+    weights     = getattr(CFG, "METRIC_WEIGHTS", getattr(CFG, "WEIGHTS_10D", {}))
+    directions  = getattr(CFG, "METRIC_DIRECTIONS", {})
 
+    # Who to run
     ids = _load_ids(args.ids_csv, demo)
     if args.limit:
         ids = ids[: args.limit]
@@ -65,20 +67,19 @@ def main():
         try:
             feats, aux = cm.compute_features(str(uid), demo, cur, pri, lists)
 
-            # Get ratio, numerator (w·m), denominator (w·x*)
+            # Final suitability as ratio + parts:
+            #   numerator = w · m       (dot with actual metrics)
+            #   denom     = w · x*      (dot with best-case vector)
             score_ratio, numerator, denom = sm.suitability_score_named(
-                feats,
-                weights=weights,
-                directions=directions,
-                return_parts=True,
+                feats, weights=weights, directions=directions, return_parts=True
             )
 
             record: Dict[str, Any] = {
                 CFG.COLS["id"]: uid,
                 **feats,
-                "score": numerator,          # raw dot-product (kept for compatibility)
-                "score_out_of": denom,       # denominator (best-case dot-product)
-                "score_ratio": score_ratio,  # final suitability per Aparna
+                "score": float(numerator),
+                "score_out_of": float(denom),
+                "score_ratio": float(score_ratio),
             }
 
             if args.include_aux:
@@ -108,6 +109,7 @@ def main():
     if id_col in cols:
         out_df = out_df[[id_col] + [c for c in cols if c != id_col]]
 
+    # Write
     out_fmt = args.format if args.format != "auto" else ("parquet" if args.out.lower().endswith(".parquet") else "csv")
     if out_fmt == "parquet":
         out_df.to_parquet(args.out, index=False)
@@ -116,6 +118,7 @@ def main():
 
     print(f"\nWrote {len(out_df):,} rows to {args.out}")
 
+    # Error log
     if errors:
         err_path = args.out.rsplit(".", 1)[0] + ".errors.jsonl"
         with open(err_path, "w", encoding="utf-8") as f:
@@ -123,6 +126,7 @@ def main():
                 f.write(json.dumps(rec) + "\n")
         print(f"Encountered {len(errors)} errors. Details → {err_path}")
 
+    # Preview a few key columns if present
     if not out_df.empty:
         preferred = [id_col, "score_ratio", "score", "score_out_of"]
         extra = [c for c in out_df.columns if c not in preferred][:5]
