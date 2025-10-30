@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from __future__ import annotations
-import argparse, json
+import argparse, json, math
 from typing import Dict, Any, List, Optional
 import pandas as pd
 from tqdm import tqdm
@@ -71,15 +71,41 @@ def main():
             #   numerator = w · m       (dot with actual metrics)
             #   denom     = w · x*      (dot with best-case vector)
             score_ratio, numerator, denom = sm.suitability_score_named(
-                feats, weights=weights, directions=directions, return_parts=True
+                feats,
+                weights=weights,
+                directions=directions,
+                return_parts=True,
             )
+
+            #  NaN/None/0 safe handling 
+            no_denom = (
+                denom is None
+                or denom == 0
+                or (isinstance(denom, float) and math.isnan(denom))
+            )
+
+            if no_denom:
+                score_ratio_safe = math.nan
+                numerator_safe = math.nan
+                denom_safe = math.nan
+                evaluated_flag = 0  # "not evaluated / insufficient data"
+                score_pct_of_out = math.nan
+            else:
+                score_ratio_safe = float(score_ratio)
+                numerator_safe = float(numerator)
+                denom_safe = float(denom)
+                evaluated_flag = 1  # "evaluated"
+                # <-- HERE is the NaN-safe percentage
+                score_pct_of_out = (numerator_safe / denom_safe) * 100.0
 
             record: Dict[str, Any] = {
                 CFG.COLS["id"]: uid,
                 **feats,
-                "score": float(numerator),
-                "score_out_of": float(denom),
-                "score_ratio": float(score_ratio),
+                "score": numerator_safe,
+                "score_out_of": denom_safe,
+                "score_ratio": score_ratio_safe,
+                "score_pct_of_out": score_pct_of_out,  # NEW
+                "evaluated": evaluated_flag,
             }
 
             if args.include_aux:
@@ -110,7 +136,11 @@ def main():
         out_df = out_df[[id_col] + [c for c in cols if c != id_col]]
 
     # Write
-    out_fmt = args.format if args.format != "auto" else ("parquet" if args.out.lower().endswith(".parquet") else "csv")
+    out_fmt = (
+        args.format
+        if args.format != "auto"
+        else ("parquet" if args.out.lower().endswith(".parquet") else "csv")
+    )
     if out_fmt == "parquet":
         out_df.to_parquet(args.out, index=False)
     else:
@@ -128,7 +158,7 @@ def main():
 
     # Preview a few key columns if present
     if not out_df.empty:
-        preferred = [id_col, "score_ratio", "score", "score_out_of"]
+        preferred = [id_col, "score_ratio", "score", "score_out_of", "score_pct_of_out", "evaluated"]
         extra = [c for c in out_df.columns if c not in preferred][:5]
         preview_cols = [c for c in preferred if c in out_df.columns] + extra
         print("\nPreview:")

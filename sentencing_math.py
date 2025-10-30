@@ -8,9 +8,11 @@ sentencing_math.py — PURE math/metrics (no I/O)
 Author: Taufia Hussain
 License: MIT
 """
+
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Optional, Dict, Tuple
+import math
 
 # Optional config hook (safe)
 try:
@@ -292,17 +294,16 @@ def suitability_score_named(
     weights: Optional[Mapping[str, float]] = None,
     directions: Optional[Mapping[str, int]] = None,
     return_parts: bool = False,
-) -> float | Tuple[float, float, float]:
+    none_if_no_metrics: bool = False,   # <--- NEW: choose None vs NaN vs 0.0 behavior
+) -> float | Tuple[float, float, float] | Tuple[float, float, float, int]:
     """
     Final suitability score (paper Eq. 2 + Eq. 3):
-      ratio = (Σ w_k * m_{k,i}) / out_of,
+      ratio = (Σ w_k * m_{k,i}) / out_of
 
-    - numerator: dot product of weights and the person's metric vector.
-    - denominator ("out-of"): computed by suitability_out_of_named (single source of truth).
-    - Only keys present in BOTH metrics and weights contribute.
-    - If return_parts=True, returns (ratio, numerator, denominator).
+    If there are no evaluable metrics (empty intersection) or out_of == 0:
+      - returns NaN by default (or None if none_if_no_metrics=True).
+    If return_parts=True, returns (ratio, numerator, denominator[, present_keys]).
     """
-    # defaults from config if not provided
     if weights is None:
         if CFG is None or not hasattr(CFG, "METRIC_WEIGHTS"):
             raise RuntimeError("Weights not provided and config.METRIC_WEIGHTS not available.")
@@ -311,15 +312,35 @@ def suitability_score_named(
         directions = getattr(CFG, "METRIC_DIRECTIONS", {})
 
     keys = set(metrics) & set(weights)
+    present_keys = len(keys)
+
+    # handle no-evaluable case upfront
+    if present_keys == 0:
+        empty_val: float | None = None if none_if_no_metrics else math.nan
+        if return_parts:
+            # numerator=0, denominator=0 in this state
+            # include present_keys at the end for callers that want to branch
+            return (empty_val, 0.0, 0.0, present_keys)  # type: ignore[return-value]
+        return empty_val  # type: ignore[return-value]
 
     # numerator: w · m
     numerator = sum(float(weights[k]) * float(metrics[k]) for k in keys)
 
-    # denominator: delegate to the single source of truth
-    out_of = suitability_out_of_named(
+    # denominator from single source of truth
+    out_of = float(suitability_out_of_named(
         metrics, weights=weights, directions=directions, best_value_overrides=None
-    )
-    out_of = float(out_of)
+    ))
 
-    ratio = (numerator / out_of) if out_of > 0 else 0.0
-    return (ratio, float(numerator), out_of) if return_parts else ratio
+    if out_of <= 0.0:
+        empty_val: float | None = None if none_if_no_metrics else math.nan
+        if return_parts:
+            return (empty_val, numerator, out_of, present_keys)  # type: ignore[return-value]
+        return empty_val  # type: ignore[return-value]
+
+    ratio = numerator / out_of
+    if return_parts:
+        # keep old 3-tuple shape for compatibility,
+        # but if you want present_keys, uncomment next line and update callers.
+        # return (ratio, numerator, out_of, present_keys)
+        return (ratio, numerator, out_of)
+    return ratio
