@@ -1,5 +1,7 @@
-# Introduction
-Batch runner to compute **population-level sentencing metrics** and **suitability scores** for all individuals, writing a flat file (CSV/Parquet). The pipeline is strict about missing inputs: metrics are **skipped** when their prerequisites aren’t present (no fabricated values). Metrics are **named and extensible**; new metrics can be added without changing positional order.
+# population_metrics
+Batch runner to compute **population-level sentencing metrics** and **suitability scores** for all individuals, writing a flat file (CSV/Parquet). The pipeline is strict about missing inputs:
+when nothing can be evaluated for a person, we emit NaNs instead of 0 so the case can be flagged,
+metrics are **skipped** when their prerequisites aren’t present (no fabricated values). Metrics are **named and extensible**; new metrics can be added without changing positional order.
 
 ## Repo contents
 - `config.py` — Paths (DEV/PROD), column map (`COLS`), defaults (`DEFAULTS`), offense lists (`OFFENSE_LISTS`), and metric weights (`METRIC_WEIGHTS`).
@@ -44,6 +46,12 @@ python run.py --out sample.csv --limit 500
 
 ## Output
 - Main file: CSV/Parquet with one row per ID, including named metrics, `score` (suitability), and `score_out_of` (sum of absolute weights for present metrics).
+- If an ID has no evaluable metrics (e.g. all offenses → other, or required denominators are 0), the runner now writes:
+     score = NaN
+     score_out_of = NaN
+     score_ratio = NaN
+     evaluated = 0
+This allows downstream tools to tell “not evaluated / insufficient data” apart from “evaluated and low score.
 - If `--include-aux` is used, the file also includes `time_outside_months` ( \( \mathrm{out}^t_i \) ), representing total months spent outside prison across all convictions.
 - Errors (if any): `*.errors.jsonl` with `{id, error}` records.
 - Console preview prints the first rows/columns for a quick check.
@@ -248,7 +256,7 @@ where `x_k* = 1` for `d_k = +1` (positive-direction metrics)
 and `x_k* = 0` for `d_k = −1` (negative-direction metrics).
 
 
-> **Notes:**  
+>**Notes:**  
 > • Proportion metrics are computed **only** when denominators \(> 0\); otherwise the metric is **SKIPPED**.  
 > • Frequency requires **both** `time_outside > 0` **and** configured `freq_min_rate`/`freq_max_rate`.  
 > • Rehab/education are per‑month‑inside, then min–max normalized **only if** inputs and bounds are provided; otherwise **omitted**.
@@ -259,36 +267,70 @@ and `x_k* = 0` for `d_k = −1` (negative-direction metrics).
 - Offense classification uses only `OFFENSE_LISTS`; anything unlisted → **other** (and does not contribute to denominators).
 - Suitability uses **only present (gated)** features with explicit `METRIC_WEIGHTS` (no hidden zero‑weights).
 - When comparing individuals (similarity), compute on the **intersection of present features** and require a minimum shared‑dimension count (e.g., ≥3). Consider also Euclidean or Tanimoto for sensitivity analysis.
+- If no metrics pass the gating (denominators 0, missing exposure, missing age, etc.), the scorer returns NaN (or None, depending on runner) and sets evaluated = 0. This is intentional and we do not fabricate zeros for unevaluable people.
 
 ## Programmatic example
 ```python
-import config as CFG, compute_metrics as cm, sentencing_math as sm
+import math
+import config as CFG
+import compute_metrics as cm
+import sentencing_math as sm
 import pandas as pd
 
+# load source tables
 demo = cm.read_table(CFG.PATHS["demographics"])
 cur  = cm.read_table(CFG.PATHS["current_commitments"])
 pri  = cm.read_table(CFG.PATHS["prior_commitments"])
 
-ids = demo[CFG.COLS["id"]].astype(str).unique().tolist()[:3]
+# take a few IDs for the demo
+ids = demo[CFG.COLS["id"]].astype(str).dropna().unique().tolist()[:3]
+
 rows = []
 for uid in ids:
     feats, aux = cm.compute_features(uid, demo, cur, pri, CFG.OFFENSE_LISTS)
 
-    # Compute suitability score (directional dot product)
-    present = feats.keys() & CFG.METRIC_WEIGHTS.keys()
-    score = sm.suitability_score_named(feats, CFG.METRIC_WEIGHTS)
-    score_out_of = sum(abs(CFG.METRIC_WEIGHTS[k]) for k in present)
+    # name-based suitability; may return NaN/None if no evaluable metrics
+    score_ratio, num, den = sm.suitability_score_named(
+        feats,
+        weights=CFG.METRIC_WEIGHTS,
+        directions=getattr(CFG, "METRIC_DIRECTIONS", {}),
+        return_parts=True,
+    )  # score_ratio == (num / den) when den>0
+
+    # NaN / “not evaluated” safe handling
+    no_denom = (
+        den is None
+        or den == 0
+        or (isinstance(den, float) and math.isnan(den))
+    )
+    if no_denom:
+        score_ratio_safe = math.nan
+        num_safe = math.nan
+        den_safe = math.nan
+        evaluated = 0
+    else:
+        score_ratio_safe = float(score_ratio)
+        num_safe = float(num)
+        den_safe = float(den)
+        evaluated = 1
 
     # Optional: expose time_outside if present in aux
-    time_outside = aux.get("time_outside", None)
+    time_outside = aux.get("time_outside")
+    pct_completed = aux.get("pct_completed")
 
-    rows.append({
-        CFG.COLS["id"]: uid,
-        **feats,
-        "score": score,
-        "score_out_of": score_out_of,
-        "time_outside": time_outside
-    })
+    rows.append(
+        {
+            CFG.COLS["id"]: uid,
+            **feats,                # all computed named metrics
+            "score": num_safe,      # numerator (Σ w·m)
+            "score_out_of": den_safe,
+            "score_ratio": score_ratio_safe,
+            "evaluated": evaluated,  # 1 = evaluated, 0 = not evaluable
+            "time_outside": time_outside,
+            "pct_completed": pct_completed,
+        }
+    )
+
 df = pd.DataFrame(rows)
 print(df.head())
 ```
