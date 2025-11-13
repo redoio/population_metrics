@@ -4,12 +4,13 @@
 compute_metrics.py — parameterized, raw-data–oriented (library only)
 
 Pipeline (library functions):
-  read → parse → classify(offenses via config) → time → features
+  read → parse → classify(offenses) → time → features
 Scoring/printing should be handled by a separate runner (e.g., run_compute_metrics.py).
 
 Relies on:
-  - config.py: PATHS, COLS, DEFAULTS, offense classification helpers, METRIC_WEIGHTS
+  - config.py: PATHS, COLS, DEFAULTS, METRIC_WEIGHTS
   - sentencing_math.py: pure math helpers (imported as sm)
+  - offense_helpers.py: classify_offense (uses OFFENSE_LISTS/OFFENSE_POLICY from config)
 
 Design notes:
   • Missing numerics remain NaN (configurable via DEFAULTS["missing_numeric"]).
@@ -28,6 +29,7 @@ import pandas as pd
 from pandas.tseries.offsets import DateOffset
 import config as CFG
 import sentencing_math as sm
+from offense_helpers import classify_offense
 
 # Small config helpers
 def _cfg_col(name: str) -> Optional[str]:
@@ -45,7 +47,10 @@ def _to_raw_github_url(path: str) -> str:
         return path
     if "github.com" not in path:
         return path
-    return path.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/blob/", "/")
+    return (
+        path.replace("https://github.com/", "https://raw.githubusercontent.com/")
+        .replace("/blob/", "/")
+    )
 
 def read_table(path: str) -> pd.DataFrame:
     """Read CSV/XLSX from local path or HTTP(S)."""
@@ -93,17 +98,21 @@ def to_months(val: Any, colname: Optional[str]) -> float:
         return x / 30.0
     return x
 
-# Offense counting (uses config.classify_offense)
-def count_offenses_by_category(df: pd.DataFrame, id_col: str, uid: str,
-                               offense_col: str, lists: Dict[str, Any]) -> Dict[str, int]:
+# Offense counting (uses classify_offense from offense_helpers.py)
+def count_offenses_by_category(
+    df: pd.DataFrame,
+    id_col: str,
+    uid: str,
+    offense_col: str,
+    lists: Dict[str, Any],
+) -> Dict[str, int]:
     """Return counts by category for all rows matching an ID."""
     out = {"violent": 0, "nonviolent": 0, "other": 0, "clash": 0}
     if df is None or offense_col not in df.columns or id_col not in df.columns:
         return out
     sub = df.loc[df[id_col].astype(str) == str(uid)]
-    # Delegate classification policy to config.py
     for _, row in sub.iterrows():
-        label = CFG.classify_offense(row[offense_col], lists)
+        label = classify_offense(row[offense_col], lists)
         out[label] += 1
     return out
 
@@ -118,7 +127,11 @@ def extract_time_inputs(demo_row: Optional[pd.Series]) -> Optional[sm.TimeInputs
 
     cur = to_months(demo_row.get(_cfg_col("current_sentence")), _cfg_col("current_sentence"))
     com = to_months(demo_row.get(_cfg_col("completed_time")),  _cfg_col("completed_time"))
-    pas = to_months(demo_row.get(_cfg_col("past_time")),       _cfg_col("past_time")) if _cfg_col("past_time") else _cfg_default("missing_numeric", np.nan)
+    pas = (
+        to_months(demo_row.get(_cfg_col("past_time")), _cfg_col("past_time"))
+        if _cfg_col("past_time")
+        else _cfg_default("missing_numeric", np.nan)
+    )
 
     req = tuple(_cfg_default("require_time_fields", ("current_sentence", "completed_time")))
     need_cur = "current_sentence" in req
@@ -155,11 +168,13 @@ def _months_between(start: pd.Timestamp, end: pd.Timestamp) -> Optional[float]:
     return max(0.0, days / 30.0)
 
 # Feature computation (public API)
-def compute_features(uid: str,
-                     demo: pd.DataFrame,
-                     current_df: pd.DataFrame,
-                     prior_df: pd.DataFrame,
-                     lists: Dict[str, Any]) -> Tuple[Dict[str, float], Dict[str, Any]]:
+def compute_features(
+    uid: str,
+    demo: pd.DataFrame,
+    current_df: pd.DataFrame,
+    prior_df: pd.DataFrame,
+    lists: Dict[str, Any],
+) -> Tuple[Dict[str, float], Dict[str, Any]]:
     """
     Compute name-keyed metrics for a single ID.
 
@@ -202,7 +217,7 @@ def compute_features(uid: str,
         feats["age"] = sm.score_age_norm(
             age_val,
             _cfg_default("age_min", None),
-            _cfg_default("age_max", None)
+            _cfg_default("age_max", None),
         )
         aux["age_value"] = age_val
     else:
@@ -229,7 +244,12 @@ def compute_features(uid: str,
     time_outside = aux["time_outside"]
     have_bounds = (minr is not None and maxr is not None and float(maxr) > float(minr))
 
-    if (isinstance(time_outside, (int, float)) and not np.isnan(time_outside) and time_outside > 0) and have_bounds:
+    if (
+        isinstance(time_outside, (int, float))
+        and not np.isnan(time_outside)
+        and time_outside > 0
+        and have_bounds
+    ):
         feats["freq_violent"] = sm.score_freq_violent(conv.violent_total, time_outside, minr, maxr)
         feats["freq_total"]   = sm.score_freq_total(  conv.total,         time_outside, minr, maxr)
     # else: skip both freq_* features
@@ -241,6 +261,7 @@ def compute_features(uid: str,
             conv.curr_violent_prop, conv.past_violent_prop, yrs_elapsed
         )
     # else: skip
+
     # Rehabilitation / Education metrics:
     # Intentionally omitted here because the public tables we load do not contain
     # reliable program-credit fields. Per policy, we do not fabricate zeros.
