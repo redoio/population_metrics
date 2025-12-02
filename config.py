@@ -23,6 +23,27 @@ PATHS_DEV = {
 
 PATHS = PATHS_PROD if PROFILE == "PROD" else PATHS_DEV
 
+
+# Similarity / severity configuration
+
+# Minimum number of overlapping (valid) features required for similarity.
+# If the intersection size is < MIN_OVERLAP_FOR_SIMILARITY, all similarity
+# measures (cosine, euclidean_sim, tanimoto, jaccard) should return NaN.
+MIN_OVERLAP_FOR_SIMILARITY: int = 3
+
+# Decay rate λ used in the severity_trend formula:
+#   severity_trend = Δv * exp(-λ * years_elapsed)
+SEVERITY_DECAY_RATE: float = 0.15  # can be tuned as needed
+
+# Global override for the years_elapsed used in severity_trend.
+# Workflow:
+#   1) By default, code computes elapsed years from
+#      first prior → last current commitment dates.
+#   2) If DEFAULT_TIME_ELAPSED_YEARS is not None, it replaces
+#      the computed value and acts as the default horizon.
+DEFAULT_TIME_ELAPSED_YEARS: Any = 10.0
+
+
 # Column Map
 COLS: Dict[str, Any] = {
     "id": "cdcno",                           # REQUIRED identifier
@@ -46,7 +67,8 @@ DEFAULTS: Dict[str, Any] = {
     "missing_numeric": math.nan,
     "require_time_fields": ("current_sentence", "completed_time"),
 
-    # Optional global exposure window (months); if None, compute per-person.
+    # Optional global exposure window (months) for frequency metrics.
+    # If None, the code computes a per-person window from (DOB+18y) to reference_date.
     "months_elapsed_total": None,
 
     # Age normalization (only used if age_years is present and valid)
@@ -57,9 +79,6 @@ DEFAULTS: Dict[str, Any] = {
     # Frequency normalization bounds (None => skip freq_* entirely)
     "freq_min_rate": None,
     "freq_max_rate": None,
-
-    # Years window for severity trend
-    "trend_years_elapsed": 10.0,
 
     # Childhood months (if used)
     "childhood_months": 0.0,
@@ -100,7 +119,8 @@ METRIC_NAMES = [
 ]
 
 METRIC_WEIGHTS: Dict[str, float] = {
-    "age": 0.0,
+    # Age is a full metric (normalized and positively aligned with suitability)
+    "age": 1.0,
     "desc_nonvio_curr": 1.0,
     "desc_nonvio_past": 1.0,
     "freq_violent": 1.0,
@@ -118,7 +138,8 @@ METRIC_DIRECTIONS: Dict[str, int] = {
     "age": +1,
     "freq_violent": -1,
     "freq_total": -1,
-    "severity_trend": +1,
+    # severity_trend is inversely related to suitability (ideal = 0)
+    "severity_trend": -1,
     "edu_general": +1,
     "edu_advanced": +1,
     "rehab_general": +1,
@@ -136,5 +157,5 @@ METRIC_RANGES: Dict[str, Any] = {
     "edu_general":   (0.0, 1.0),
     "edu_advanced":  (0.0, 1.0),
     "rehab_general": (0.0, 1.0),
-    "rehab_advanced":(0.0, 1.0),
+    "rehab_advanced": (0.0, 1.0),
 }

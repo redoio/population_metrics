@@ -1,56 +1,74 @@
-# offense_helpers.py
+# offense_helpers.py — STRICT, config-driven (Aparna-approved)
 from __future__ import annotations
 from typing import Any, Dict
 import re
 import config as CFG
 
-_PENAL_RE = re.compile(r"[0-9]{2,5}(?:\.[0-9]+)?")  # e.g., '187', '653.22'
+# Extract numeric penal code patterns like "187", "653.2", "245.5"
+_PENAL_RE = re.compile(r"[0-9]{2,5}(?:\.[0-9]+)?")
 
 
 def _normalize_offense_token(x: Any) -> str:
     """
-    Extract a normalized token for matching: prefer a numeric penal code if present,
-    else cleaned lowercase text.
+    Prefer a numeric penal code if present (e.g., 'PC 187(a)' -> '187'),
+    else return the original string trimmed.
+
+    IMPORTANT:
+      - Does NOT use OFFENSE_POLICY
+      - No lowercase conversion
+      - No punctuation stripping beyond numeric extraction
     """
     if x is None:
         return ""
     s = str(x).strip()
-    if CFG.OFFENSE_POLICY.get("case_insensitive", True):
-        s = s.lower()
+    if not s:
+        return ""
     m = _PENAL_RE.search(s)
-    if m:
-        return m.group(0)
-    if CFG.OFFENSE_POLICY.get("strip_punctuation", True):
-        s = re.sub(r"[^a-z0-9\. ]+", " ", s).strip()
-    return s
+    return m.group(0) if m else s
 
 
 def classify_offense(code_or_text: Any, lists: Dict[str, Any] | None = None) -> str:
     """
-    Map offense to: 'violent' | 'nonviolent' | 'other' | 'clash'.
-    Uses OFFENSE_LISTS / OFFENSE_POLICY from config by default.
+    Strict classification using config.OFFENSE_LISTS.
+    Does NOT use OFFENSE_POLICY (even though it exists in config.py).
+
+    Returns:
+        "violent", "nonviolent", "other", or "clash"
+
+    Logic:
+      1. violent list is always explicit
+      2. nonviolent list may be:
+           - explicit list
+           - "rest" meaning: everything not violent is nonviolent
+      3. clash if token appears in both lists (rare, but safe)
     """
     li = lists or CFG.OFFENSE_LISTS
+
     token = _normalize_offense_token(code_or_text)
+    if token == "":
+        return "other"
 
-    vio = set(li.get("violent") or [])
-    non = set(li.get("nonviolent") or [])
+    violent_list = li.get("violent", []) or []
+    non_list     = li.get("nonviolent", [])
 
-    is_v = token in vio
-    is_n = token in non
+    is_v = token in violent_list
+    is_n = isinstance(non_list, list) and token in non_list
 
+    # Case 1: token appears in both lists → clash
     if is_v and is_n:
         return "clash"
+
+    # Case 2: explicit violent
     if is_v:
         return "violent"
-    if is_n:
+
+    # Case 3: explicit nonviolent list
+    if isinstance(non_list, list):
+        return "nonviolent" if is_n else "other"
+
+    # Case 4: nonviolent == "rest" mode
+    if non_list == "rest":
         return "nonviolent"
-    if CFG.OFFENSE_POLICY.get("nonviolent_rest_mode", False):
-        return "nonviolent"
+
+    # Case 5: fallback
     return "other"
-
-
-# Optional early warning if lists overlap
-_DUP = set(CFG.OFFENSE_LISTS.get("violent", [])) & set(CFG.OFFENSE_LISTS.get("nonviolent", []))
-if _DUP:
-    print(f"[WARN] Offense codes appear in both categories (clash): {sorted(_DUP)[:10]} ...")

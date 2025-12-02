@@ -50,7 +50,7 @@ def main():
 
     # Policy knobs
     lists       = getattr(CFG, "OFFENSE_LISTS", {"violent": [], "nonviolent": []})
-    weights     = getattr(CFG, "METRIC_WEIGHTS", getattr(CFG, "WEIGHTS_10D", {}))
+    weights     = getattr(CFG, "METRIC_WEIGHTS", getattr(CFG, "WEIGHTS", {}))
     directions  = getattr(CFG, "METRIC_DIRECTIONS", {})
 
     # Who to run

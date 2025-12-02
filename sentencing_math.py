@@ -21,16 +21,18 @@ except Exception:
     CFG = None  # type: ignore
 
 
-# Utilities 
+# Utilities
 def safe_div(n: float, d: float) -> float:
     """0-safe division; returns 0.0 if d is 0/None."""
     if d is None or d == 0:
         return 0.0
     return float(n) / float(d)
 
+
 def clip01(x: float) -> float:
     """Clamp to [0,1]."""
     return max(0.0, min(1.0, float(x)))
+
 
 def minmax_norm_scalar(x: float, lo: Optional[float], hi: Optional[float]) -> float:
     """
@@ -42,13 +44,14 @@ def minmax_norm_scalar(x: float, lo: Optional[float], hi: Optional[float]) -> fl
     return clip01((float(x) - float(lo)) / (float(hi) - float(lo)))
 
 
-# Time Variables 
+# Time Variables
 @dataclass
 class TimeInputs:
     current_sentence_months: float
     completed_months: float
     past_time_months: float
     childhood_months: Optional[float] = None  # pass explicitly or read via helper
+
 
 def _get_childhood_months_from_cfg() -> float:
     if CFG is None:
@@ -57,6 +60,7 @@ def _get_childhood_months_from_cfg() -> float:
         return float(CFG.DEFAULTS["childhood_months"])
     except Exception as e:
         raise RuntimeError("DEFAULTS['childhood_months'] missing in config.py") from e
+
 
 def compute_time_vars(t: TimeInputs, months_elapsed_total: Optional[float]) -> tuple[float, float, float]:
     """
@@ -73,7 +77,7 @@ def compute_time_vars(t: TimeInputs, months_elapsed_total: Optional[float]) -> t
     return time_inside, pct_completed, time_outside
 
 
-# Convictions 
+# Convictions
 @dataclass
 class Convictions:
     curr_nonviolent: float
@@ -83,58 +87,128 @@ class Convictions:
 
     # Totals
     @property
-    def curr_total(self) -> float: return float(self.curr_nonviolent) + float(self.curr_violent)
+    def curr_total(self) -> float:
+        return float(self.curr_nonviolent) + float(self.curr_violent)
+
     @property
-    def past_total(self) -> float: return float(self.past_nonviolent) + float(self.past_violent)
+    def past_total(self) -> float:
+        return float(self.past_nonviolent) + float(self.past_violent)
+
     @property
-    def total(self) -> float: return self.curr_total + self.past_total
+    def total(self) -> float:
+        return self.curr_total + self.past_total
 
     # Totals by type
     @property
-    def violent_total(self) -> float: return float(self.curr_violent) + float(self.past_violent)
+    def violent_total(self) -> float:
+        return float(self.curr_violent) + float(self.past_violent)
+
     @property
-    def nonviolent_total(self) -> float: return float(self.curr_nonviolent) + float(self.past_nonviolent)
+    def nonviolent_total(self) -> float:
+        return float(self.curr_nonviolent) + float(self.past_nonviolent)
 
     # Proportions (clipped)
     @property
-    def curr_nonviolent_prop(self) -> float: return clip01(safe_div(self.curr_nonviolent, self.curr_total))
+    def curr_nonviolent_prop(self) -> float:
+        return clip01(safe_div(self.curr_nonviolent, self.curr_total))
+
     @property
-    def past_nonviolent_prop(self) -> float: return clip01(safe_div(self.past_nonviolent, self.past_total))
+    def past_nonviolent_prop(self) -> float:
+        return clip01(safe_div(self.past_nonviolent, self.past_total))
+
     @property
-    def curr_violent_prop(self) -> float: return clip01(safe_div(self.curr_violent, self.curr_total))
+    def curr_violent_prop(self) -> float:
+        return clip01(safe_div(self.curr_violent, self.curr_total))
+
     @property
-    def past_violent_prop(self) -> float: return clip01(safe_div(self.past_violent, self.past_total))
+    def past_violent_prop(self) -> float:
+        return clip01(safe_div(self.past_violent, self.past_total))
 
 
-# Descriptive Scoring 
+# Descriptive Scoring
 def score_desc_nonvio_curr(curr_nonviolent: float, conv_curr_total: float) -> float:
     return clip01(safe_div(curr_nonviolent, conv_curr_total))
 
+
 def score_desc_nonvio_past(past_nonviolent: float, conv_past_total: float) -> float:
     return clip01(safe_div(past_nonviolent, conv_past_total))
+
 
 def score_age_norm(age_value: float, age_min: Optional[float], age_max: Optional[float]) -> float:
     return minmax_norm_scalar(age_value, age_min, age_max)
 
 
-# Frequency & Trend 
-def score_freq_violent(conv_violent_total: float, time_outside_months: float,
-                       min_rate: Optional[float], max_rate: Optional[float]) -> float:
+# Frequency & Trend
+def score_freq_violent(
+    conv_violent_total: float,
+    time_outside_months: float,
+    min_rate: Optional[float],
+    max_rate: Optional[float],
+) -> float:
     raw = safe_div(conv_violent_total, time_outside_months)
     return minmax_norm_scalar(raw, min_rate, max_rate)
 
-def score_freq_total(conv_total: float, time_outside_months: float,
-                     min_rate: Optional[float], max_rate: Optional[float]) -> float:
+
+def score_freq_total(
+    conv_total: float,
+    time_outside_months: float,
+    min_rate: Optional[float],
+    max_rate: Optional[float],
+) -> float:
     raw = safe_div(conv_total, time_outside_months)
     return minmax_norm_scalar(raw, min_rate, max_rate)
 
-def score_severity_trend(curr_violent_prop: float, past_violent_prop: float, years_elapsed: float) -> float:
-    # Higher means a shift toward non-violence.
-    raw_delta = (past_violent_prop - curr_violent_prop) / (years_elapsed + 1.0)
-    return clip01((raw_delta + 1.0) / 2.0)
+
+def _get_severity_decay_rate_from_cfg() -> float:
+    if CFG is None or not hasattr(CFG, "SEVERITY_DECAY_RATE"):
+        raise RuntimeError(
+            "SEVERITY_DECAY_RATE not available in config; "
+            "pass decay_rate explicitly to score_severity_trend."
+        )
+    return float(CFG.SEVERITY_DECAY_RATE)
 
 
-# Rehabilitation Scores 
+def score_severity_trend(
+    curr_violent_prop: float,
+    past_violent_prop: float,
+    years_elapsed: float,
+    decay_rate: Optional[float] = None,
+) -> float:
+    """
+    Updated severity trend per preprint:
+
+        severity_trend = Δv * exp(-λ * years_elapsed)
+
+    Where:
+      Δv = max(0, curr_violent_prop - past_violent_prop)
+           (i.e., only increases in violent share are penalized),
+      λ  = decay_rate (from config.SEVERITY_DECAY_RATE by default),
+      years_elapsed >= 0.
+
+    Properties:
+      • 0 is the ideal value (no worsening in severity).
+      • Larger values → more recent increases in severity.
+      • Clipped to [0,1] for compatibility with METRIC_RANGES.
+    """
+    # Guardrails
+    y = max(0.0, float(years_elapsed or 0.0))
+
+    # If no worsening in violent proportion, trend is 0 (ideal).
+    delta_v = max(0.0, float(curr_violent_prop) - float(past_violent_prop))
+    if delta_v <= 0.0:
+        return 0.0
+
+    lam = float(decay_rate) if decay_rate is not None else _get_severity_decay_rate_from_cfg()
+    if lam < 0:
+        # Negative decay makes no sense here; fall back to 0.
+        lam = 0.0
+
+    damp = math.exp(-lam * y)
+    raw = delta_v * damp
+    return clip01(raw)
+
+
+# Rehabilitation Scores
 @dataclass
 class RehabInputs:
     # Use None so callers/config decide whether to include or skip these metrics.
@@ -143,27 +217,48 @@ class RehabInputs:
     rehab_general_credits: Optional[float] = None
     rehab_advanced_credits: Optional[float] = None
 
+
 def _per_month_inside(value: float, time_inside_months: float) -> float:
     return safe_div(value, time_inside_months)
 
-def score_edu_general(edu_general_credits: float, time_inside_months: float,
-                      lo: Optional[float], hi: Optional[float]) -> float:
+
+def score_edu_general(
+    edu_general_credits: float,
+    time_inside_months: float,
+    lo: Optional[float],
+    hi: Optional[float],
+) -> float:
     return minmax_norm_scalar(_per_month_inside(edu_general_credits, time_inside_months), lo, hi)
 
-def score_edu_advanced(edu_advanced_credits: float, time_inside_months: float,
-                       lo: Optional[float], hi: Optional[float]) -> float:
+
+def score_edu_advanced(
+    edu_advanced_credits: float,
+    time_inside_months: float,
+    lo: Optional[float],
+    hi: Optional[float],
+) -> float:
     return minmax_norm_scalar(_per_month_inside(edu_advanced_credits, time_inside_months), lo, hi)
 
-def score_rehab_general(rehab_general_credits: float, time_inside_months: float,
-                        lo: Optional[float], hi: Optional[float]) -> float:
+
+def score_rehab_general(
+    rehab_general_credits: float,
+    time_inside_months: float,
+    lo: Optional[float],
+    hi: Optional[float],
+) -> float:
     return minmax_norm_scalar(_per_month_inside(rehab_general_credits, time_inside_months), lo, hi)
 
-def score_rehab_advanced(rehab_advanced_credits: float, time_inside_months: float,
-                         lo: Optional[float], hi: Optional[float]) -> float:
+
+def score_rehab_advanced(
+    rehab_advanced_credits: float,
+    time_inside_months: float,
+    lo: Optional[float],
+    hi: Optional[float],
+) -> float:
     return minmax_norm_scalar(_per_month_inside(rehab_advanced_credits, time_inside_months), lo, hi)
 
 
-# Vector Inputs & Builder 
+# Vector Inputs & Builder
 @dataclass
 class VectorInputs:
     time: TimeInputs
@@ -177,6 +272,9 @@ class VectorInputs:
     freq_max_rate: Optional[float] = None
     years_elapsed_for_trend: float = 0.0
     rehab_norm_bounds: Optional[Dict[str, tuple[Optional[float], Optional[float]]]] = None
+    # NEW: allow caller to pass severity decay rate explicitly; falls back to config.
+    severity_decay_rate: Optional[float] = None
+
 
 def build_metrics_named(vin: VectorInputs) -> Dict[str, float]:
     """
@@ -193,13 +291,26 @@ def build_metrics_named(vin: VectorInputs) -> Dict[str, float]:
     m_age = score_age_norm(vin.age_value, vin.age_min, vin.age_max)
 
     # Frequency (per month outside)
-    m_freq_v = score_freq_violent(vin.convictions.violent_total, time_outside, vin.freq_min_rate, vin.freq_max_rate)
-    m_freq_t = score_freq_total(vin.convictions.total,         time_outside, vin.freq_min_rate, vin.freq_max_rate)
+    m_freq_v = score_freq_violent(
+        vin.convictions.violent_total,
+        time_outside,
+        vin.freq_min_rate,
+        vin.freq_max_rate,
+    )
+    m_freq_t = score_freq_total(
+        vin.convictions.total,
+        time_outside,
+        vin.freq_min_rate,
+        vin.freq_max_rate,
+    )
 
-    # Trend
-    m_trend = score_severity_trend(vin.convictions.curr_violent_prop,
-                                   vin.convictions.past_violent_prop,
-                                   vin.years_elapsed_for_trend)
+    # Trend (updated formula with exponential decay)
+    m_trend = score_severity_trend(
+        vin.convictions.curr_violent_prop,
+        vin.convictions.past_violent_prop,
+        vin.years_elapsed_for_trend,
+        decay_rate=vin.severity_decay_rate,
+    )
 
     out: Dict[str, float] = {
         "desc_nonvio_curr": m_desc_curr,
@@ -212,6 +323,7 @@ def build_metrics_named(vin: VectorInputs) -> Dict[str, float]:
 
     # Rehab: add only if credits are provided (None → skip)
     lohi = vin.rehab_norm_bounds or {}
+
     def _add_if_present(key: str, credits: Optional[float]) -> None:
         if credits is None:
             return
@@ -225,18 +337,20 @@ def build_metrics_named(vin: VectorInputs) -> Dict[str, float]:
         elif key == "rehab_advanced":
             out[key] = score_rehab_advanced(credits, time_inside, lo, hi)
 
-    _add_if_present("edu_general",    vin.rehab.edu_general_credits)
-    _add_if_present("edu_advanced",   vin.rehab.edu_advanced_credits)
-    _add_if_present("rehab_general",  vin.rehab.rehab_general_credits)
+    _add_if_present("edu_general", vin.rehab.edu_general_credits)
+    _add_if_present("edu_advanced", vin.rehab.edu_advanced_credits)
+    _add_if_present("rehab_general", vin.rehab.rehab_general_credits)
     _add_if_present("rehab_advanced", vin.rehab.rehab_advanced_credits)
 
     return out
 
 
-# Suitability (name-based) 
-def _best_value_for(metric: str,
-                    directions: Mapping[str, int],
-                    overrides: Optional[Mapping[str, float]] = None) -> float:
+# Suitability (name-based)
+def _best_value_for(
+    metric: str,
+    directions: Mapping[str, int],
+    overrides: Optional[Mapping[str, float]] = None,
+) -> float:
     """
     Best normalized value for a metric.
     Default: 1 if direction +1, 0 if direction -1.
@@ -247,12 +361,14 @@ def _best_value_for(metric: str,
     return 1.0 if int(directions.get(metric, +1)) > 0 else 0.0
 
 
-def suitability_out_of_named(metrics: Mapping[str, float],
-                             weights: Optional[Mapping[str, float]] = None,
-                             directions: Optional[Mapping[str, int]] = None,
-                             best_value_overrides: Optional[Mapping[str, float]] = None,
-                             *, return_breakdown: bool = False
-                             ) -> float | Tuple[float, Dict[str, float]]:
+def suitability_out_of_named(
+    metrics: Mapping[str, float],
+    weights: Optional[Mapping[str, float]] = None,
+    directions: Optional[Mapping[str, int]] = None,
+    best_value_overrides: Optional[Mapping[str, float]] = None,
+    *,
+    return_breakdown: bool = False,
+) -> float | Tuple[float, Dict[str, float]]:
     """
     'Out-of' denominator per paper: out_of = sum_{k in present} w_k * x*_k,
     where x*_k is the best-case value for metric k (Eq. 2 + Eq. 3).
@@ -278,14 +394,16 @@ def suitability_out_of_named(metrics: Mapping[str, float],
         dir_sign = 1 if int(directions.get(k, +1)) > 0 else -1
         if wk != 0 and (wk > 0) != (dir_sign > 0):
             # You can replace this with logging.warning(...)
-            print(f"[WARN] weight sign for '{k}' disagrees with METRIC_DIRECTIONS; "
-                  f"wk={wk}, direction={dir_sign}")
+            print(
+                f"[WARN] weight sign for '{k}' disagrees with METRIC_DIRECTIONS; "
+                f"wk={wk}, direction={dir_sign}"
+            )
 
         term = wk * x_star
         parts[k] = term
         out_of += term
 
-    out_of = max(0.0, float(out_of))   # guard against negative totals
+    out_of = max(0.0, float(out_of))  # guard against negative totals
     return (out_of, parts) if return_breakdown else out_of
 
 
@@ -294,7 +412,7 @@ def suitability_score_named(
     weights: Optional[Mapping[str, float]] = None,
     directions: Optional[Mapping[str, int]] = None,
     return_parts: bool = False,
-    none_if_no_metrics: bool = False,   # <--- NEW: choose None vs NaN vs 0.0 behavior
+    none_if_no_metrics: bool = False,  # choose None vs NaN vs 0.0 behavior
 ) -> float | Tuple[float, float, float] | Tuple[float, float, float, int]:
     """
     Final suitability score (paper Eq. 2 + Eq. 3):
@@ -327,9 +445,14 @@ def suitability_score_named(
     numerator = sum(float(weights[k]) * float(metrics[k]) for k in keys)
 
     # denominator from single source of truth
-    out_of = float(suitability_out_of_named(
-        metrics, weights=weights, directions=directions, best_value_overrides=None
-    ))
+    out_of = float(
+        suitability_out_of_named(
+            metrics,
+            weights=weights,
+            directions=directions,
+            best_value_overrides=None,
+        )
+    )
 
     if out_of <= 0.0:
         empty_val: float | None = None if none_if_no_metrics else math.nan

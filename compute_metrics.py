@@ -8,7 +8,7 @@ Pipeline (library functions):
 Scoring/printing should be handled by a separate runner (e.g., run_compute_metrics.py).
 
 Relies on:
-  - config.py: PATHS, COLS, DEFAULTS, METRIC_WEIGHTS
+  - config.py: PATHS, COLS, DEFAULTS, METRIC_WEIGHTS, DEFAULT_TIME_ELAPSED_YEARS
   - sentencing_math.py: pure math helpers (imported as sm)
   - offense_helpers.py: classify_offense (uses OFFENSE_LISTS/OFFENSE_POLICY from config)
 
@@ -19,6 +19,10 @@ Design notes:
   • Weights are NAME-BASED and should be applied outside this module.
   • Exposure window: uses DEFAULTS["months_elapsed_total"] if provided; otherwise
     computes per-person exposure as months from (DOB+18y) to reference_date.
+  • Severity trend: years_elapsed is computed from commitment tables
+    (first prior commitment date → last current commitment date); if
+    DEFAULT_TIME_ELAPSED_YEARS is not None, that value overrides the
+    computed years when scoring severity_trend.
   • STRICT SKIP-IF-MISSING: features are ONLY added when inputs are valid.
 """
 
@@ -31,14 +35,17 @@ import config as CFG
 import sentencing_math as sm
 from offense_helpers import classify_offense
 
+
 # Small config helpers
 def _cfg_col(name: str) -> Optional[str]:
     """Return configured column name (or None) for a logical field."""
     return getattr(CFG, "COLS", {}).get(name)
 
+
 def _cfg_default(key: str, fallback: Any) -> Any:
     """Return configured default for a key (with fallback)."""
     return getattr(CFG, "DEFAULTS", {}).get(key, fallback)
+
 
 # I/O (CSV/XLSX via pandas)
 def _to_raw_github_url(path: str) -> str:
@@ -52,6 +59,7 @@ def _to_raw_github_url(path: str) -> str:
         .replace("/blob/", "/")
     )
 
+
 def read_table(path: str) -> pd.DataFrame:
     """Read CSV/XLSX from local path or HTTP(S)."""
     path = _to_raw_github_url(path)
@@ -64,12 +72,14 @@ def read_table(path: str) -> pd.DataFrame:
         return pd.read_excel(path)
     return pd.read_csv(path)
 
+
 def get_row_by_id(df: pd.DataFrame, id_col: str, uid: str) -> Optional[pd.Series]:
     """Return first row matching the given id value (or None if missing)."""
     if df is None or id_col not in df.columns:
         return None
     sub = df.loc[df[id_col].astype(str) == str(uid)]
     return None if sub.empty else sub.iloc[0]
+
 
 # Parsing (NaN-honest)
 def _to_float_or_nan(x: Any) -> float:
@@ -80,6 +90,7 @@ def _to_float_or_nan(x: Any) -> float:
         return float(str(x).replace(",", ""))
     except Exception:
         return np.nan
+
 
 def to_months(val: Any, colname: Optional[str]) -> float:
     """
@@ -97,6 +108,7 @@ def to_months(val: Any, colname: Optional[str]) -> float:
     if "day" in nm:
         return x / 30.0
     return x
+
 
 # Offense counting (uses classify_offense from offense_helpers.py)
 def count_offenses_by_category(
@@ -116,6 +128,7 @@ def count_offenses_by_category(
         out[label] += 1
     return out
 
+
 # Time + Age extractors
 def extract_time_inputs(demo_row: Optional[pd.Series]) -> Optional[sm.TimeInputs]:
     """
@@ -126,7 +139,7 @@ def extract_time_inputs(demo_row: Optional[pd.Series]) -> Optional[sm.TimeInputs
         return None
 
     cur = to_months(demo_row.get(_cfg_col("current_sentence")), _cfg_col("current_sentence"))
-    com = to_months(demo_row.get(_cfg_col("completed_time")),  _cfg_col("completed_time"))
+    com = to_months(demo_row.get(_cfg_col("completed_time")), _cfg_col("completed_time"))
     pas = (
         to_months(demo_row.get(_cfg_col("past_time")), _cfg_col("past_time"))
         if _cfg_col("past_time")
@@ -135,7 +148,7 @@ def extract_time_inputs(demo_row: Optional[pd.Series]) -> Optional[sm.TimeInputs
 
     req = tuple(_cfg_default("require_time_fields", ("current_sentence", "completed_time")))
     need_cur = "current_sentence" in req
-    need_com = "completed_time"   in req
+    need_com = "completed_time" in req
     if (need_cur and np.isnan(cur)) or (need_com and np.isnan(com)):
         return None
 
@@ -146,6 +159,7 @@ def extract_time_inputs(demo_row: Optional[pd.Series]) -> Optional[sm.TimeInputs
         past_time_months=pas,
         childhood_months=float(_cfg_default("childhood_months", 0.0)),
     )
+
 
 def extract_age_years(demo_row: Optional[pd.Series]) -> Optional[float]:
     """
@@ -159,6 +173,7 @@ def extract_age_years(demo_row: Optional[pd.Series]) -> Optional[float]:
         return _to_float_or_nan(demo_row[col])
     return None
 
+
 # Exposure helpers
 def _months_between(start: pd.Timestamp, end: pd.Timestamp) -> Optional[float]:
     """Return months between two timestamps (≈ days/30) or None if either is NaT."""
@@ -166,6 +181,71 @@ def _months_between(start: pd.Timestamp, end: pd.Timestamp) -> Optional[float]:
         return None
     days = (end - start).days
     return max(0.0, days / 30.0)
+
+
+def _years_between(start: pd.Timestamp, end: pd.Timestamp) -> Optional[float]:
+    """Return years between two timestamps (≈ days/365.25) or None if either is NaT."""
+    if pd.isna(start) or pd.isna(end):
+        return None
+    days = (end - start).days
+    return max(0.0, days / 365.25)
+
+
+def _years_elapsed_from_commitments(
+    uid: str,
+    current_df: pd.DataFrame,
+    prior_df: pd.DataFrame,
+) -> Optional[float]:
+    """
+    Compute years_elapsed for severity trend as:
+        first recorded prior commitment date → last recorded current commitment date.
+
+    Uses optional config columns:
+        COLS["prior_commit_date"], COLS["current_commit_date"].
+
+    Returns None if:
+      • any required column is missing, or
+      • there are no valid dates for this uid.
+    """
+    id_col = CFG.COLS.get("id")
+    prior_date_col = _cfg_col("prior_commit_date")
+    current_date_col = _cfg_col("current_commit_date")
+
+    if (
+        prior_date_col is None
+        or current_date_col is None
+        or id_col is None
+        or prior_df is None
+        or current_df is None
+    ):
+        return None
+
+    # Verify columns exist
+    if (
+        id_col not in prior_df.columns
+        or id_col not in current_df.columns
+        or prior_date_col not in prior_df.columns
+        or current_date_col not in current_df.columns
+    ):
+        return None
+
+    prior_sub = prior_df.loc[prior_df[id_col].astype(str) == str(uid)]
+    curr_sub = current_df.loc[current_df[id_col].astype(str) == str(uid)]
+
+    if prior_sub.empty or curr_sub.empty:
+        return None
+
+    prior_dates = pd.to_datetime(prior_sub[prior_date_col], errors="coerce")
+    curr_dates = pd.to_datetime(curr_sub[current_date_col], errors="coerce")
+
+    if prior_dates.notna().sum() == 0 or curr_dates.notna().sum() == 0:
+        return None
+
+    first_prior = prior_dates.min()
+    last_current = curr_dates.max()
+
+    return _years_between(first_prior, last_current)
+
 
 # Feature computation (public API)
 def compute_features(
@@ -183,12 +263,12 @@ def compute_features(
         aux:   auxiliary info useful for debugging/QA (time pieces, raw counts, etc.).
     """
     cols = CFG.COLS
-    row  = get_row_by_id(demo, cols["id"], uid)
+    row = get_row_by_id(demo, cols["id"], uid)
 
     feats: Dict[str, float] = {}
-    aux:   Dict[str, Any]   = {}
+    aux: Dict[str, Any] = {}
 
-    # Determine exposure window (months)
+    # Determine exposure window (months) for frequency metrics
     # Prefer global config; else compute per-person as months from (DOB+18y) → reference_date
     per_person_exposure = _cfg_default("months_elapsed_total", None)
     if per_person_exposure is None and row is not None:
@@ -200,16 +280,16 @@ def compute_features(
             start = adulthood if pd.notna(adulthood) else dob  # fall back to dob if adulthood missing
             per_person_exposure = _months_between(start, ref)
 
-    # Time
+    # Time (inside/outside)
     t = extract_time_inputs(row)
     if t:
         aux["time_inputs"] = t
         _, pct_completed, time_outside = sm.compute_time_vars(t, per_person_exposure)
         aux["pct_completed"] = pct_completed
-        aux["time_outside"]  = time_outside
+        aux["time_outside"] = time_outside
     else:
         aux["pct_completed"] = np.nan
-        aux["time_outside"]  = np.nan
+        aux["time_outside"] = np.nan
 
     # Age (normalized) — SKIP IF MISSING
     age_val = extract_age_years(row)
@@ -225,12 +305,14 @@ def compute_features(
 
     # Convictions (current & prior)
     cur = count_offenses_by_category(current_df, cols["id"], uid, cols["current_offense_text"], lists)
-    pri = count_offenses_by_category(prior_df,   cols["id"], uid, cols["prior_offense_text"],   lists)
+    pri = count_offenses_by_category(prior_df, cols["id"], uid, cols["prior_offense_text"], lists)
     aux["counts_by_category"] = {"current": cur, "prior": pri}
 
     conv = sm.Convictions(
-        curr_nonviolent=cur["nonviolent"], curr_violent=cur["violent"],
-        past_nonviolent=pri["nonviolent"], past_violent=pri["violent"],
+        curr_nonviolent=cur["nonviolent"],
+        curr_violent=cur["violent"],
+        past_nonviolent=pri["nonviolent"],
+        past_violent=pri["violent"],
     )
 
     # Descriptive proportions — only when denominators > 0
@@ -251,16 +333,38 @@ def compute_features(
         and have_bounds
     ):
         feats["freq_violent"] = sm.score_freq_violent(conv.violent_total, time_outside, minr, maxr)
-        feats["freq_total"]   = sm.score_freq_total(  conv.total,         time_outside, minr, maxr)
+        feats["freq_total"] = sm.score_freq_total(conv.total, time_outside, minr, maxr)
     # else: skip both freq_* features
 
     # Severity trend — only when both denominators > 0
     if conv.curr_total > 0 and conv.past_total > 0:
-        yrs_elapsed = _cfg_default("trend_years_elapsed", 0.0)
+        # 1) Compute years elapsed from commitments
+        yrs_from_commits = _years_elapsed_from_commitments(uid, current_df, prior_df)
+        aux["years_elapsed_from_commitments"] = yrs_from_commits
+
+        # 2) Start with computed value, then optionally override via config
+        yrs_elapsed = yrs_from_commits
+
+        override_years = getattr(CFG, "DEFAULT_TIME_ELAPSED_YEARS", None)
+        if override_years is not None:
+            # Config override (acts as default horizon when set)
+            try:
+                yrs_elapsed = float(override_years)
+            except Exception:
+                # If override is misconfigured, silently keep computed yrs_elapsed
+                pass
+        elif yrs_elapsed is None:
+            # Fallback if neither computed nor override is available
+            yrs_elapsed = 0.0
+
+        aux["years_elapsed_for_trend"] = yrs_elapsed
+
         feats["severity_trend"] = sm.score_severity_trend(
-            conv.curr_violent_prop, conv.past_violent_prop, yrs_elapsed
+            conv.curr_violent_prop,
+            conv.past_violent_prop,
+            yrs_elapsed,
         )
-    # else: skip
+    # else: skip severity_trend
 
     # Rehabilitation / Education metrics:
     # Intentionally omitted here because the public tables we load do not contain
