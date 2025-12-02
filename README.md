@@ -23,6 +23,11 @@ Edit `config.py`:
 - `OFFENSE_LISTS`: explicit code lists; unlisted → `other` (no implicit fallback).
 - `METRIC_WEIGHTS`: **dict by name**; only present features contribute to the score.
 - Optional: set `DEFAULTS["months_elapsed_total"]` and `DEFAULTS["freq_min_rate"/"freq_max_rate"]` if you want frequency metrics to appear without per-person exposure inference.
+- `DEFAULT_TIME_ELAPSED_YEARS` and `SEVERITY_DECAY_RATE`:
+  control the time horizon and exponential decay in `severity_trend`.
+  If `DEFAULT_TIME_ELAPSED_YEARS` is not `None`, it overrides the computed
+  years elapsed; `SEVERITY_DECAY_RATE` is the λ in
+  `severity = Δv · exp(−λ · years_elapsed)`.
 
 ## Quick start
 ```bash
@@ -52,7 +57,9 @@ python run.py --out sample.csv --limit 500
      score_ratio = NaN
      evaluated = 0
 This allows downstream tools to tell “not evaluated / insufficient data” apart from “evaluated and low score.
-- If `--include-aux` is used, the file also includes `time_outside_months` ( \( \mathrm{out}^t_i \) ), representing total months spent outside prison across all convictions.
+- If `--include-aux` is used, the file also includes `time_outside_months`
+  (the paper’s `outᵢᵗ`), representing total months spent outside prison
+  across all convictions.
 - Errors (if any): `*.errors.jsonl` with `{id, error}` records.
 - Console preview prints the first rows/columns for a quick check.
 
@@ -77,10 +84,15 @@ These examples walk through **exactly** what the pipeline computes for a specifi
 ### Time Pieces
 - current_sentence_months = 10000.000
 - completed_months = 330.000
-- past_time_months = NA
-- childhood_months = 0.000
+- past_time_months = NA 
 - pct_current_completed = 3.300
 - time_outside_months = 0.000
+
+**Paper definition (Eq. B.2–15):**
+
+$$
+\mathrm{out}^t_i = t_d - \mathrm{in}^{(\mathrm{vio+nonvio}),t}_i - \text{childhood}.
+$$
 
 ### Calculations (refer to LaTeX section for formulas)
 
@@ -92,21 +104,21 @@ These examples walk through **exactly** what the pipeline computes for a specifi
   - `desc_vio_past = 0/4 = 0.000` (see Eq. **DESC-VIO-PAST**)
 
 - Severity trend:
-  - `severity_trend = ((0.000 − 0.500)/10.000 + 1)/2 = 0.477` (see Eq. **SEVERITY-TREND**)
+  - `severity_trend = 0.500 * exp(-0.150 * 10.0) = 0.112` (see Eq. **SEVERITY-TREND**;  `severity_trend = Δv * exp(-λ * T)`)
 
 - Frequency (per month outside):
-  - `time_outside_months = 0.000` → **SKIPPED** (requires `time_outside > 0` and bounds)  
-    (see Eqs. **FREQ-VIO**, **FREQ-TOTAL**)
+  - `raw_freq_violent = NA; raw_freq_total = NA`
+    `normalized: **SKIPPED** (requires `time_outside > 0` and `freq_min_rate`/`freq_max_rate`  
+     (see Eqs. **FREQ-VIO**, **FREQ-TOTAL**)
 
 - Age (min–max):
   - `age_raw = 38.000`, `min = 18.000`, `max = 90.000` → `age = 0.278` (see Eq. **AGE-NORM**)
 
 ## Final Metric Vector (named)
 Order: `desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced`  
-Values: `[0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.477, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`
+Values: `[0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.112, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`
 
-**Score:** `0.659` (out of `3.000`) — **22.0% of maximum**  
-“Out-of” is computed as described in Eq. **OUT-OF**.  
+**Score:** `1.889` (out of `3.000`) — **63.0% of maximum**    
 **Contributing metrics:** `age, desc_nonvio_curr, desc_nonvio_past, severity_trend`
 
 
@@ -130,9 +142,14 @@ Values: `[0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.477, SKIPPED, SKIPPED, SKIPPE
 - current_sentence_months = 84.000
 - completed_months = 67.200
 - past_time_months = NA
-- childhood_months = 0.000
 - pct_current_completed = 80.000
 - time_outside_months = 0.000
+
+**Paper definition (Eq. B.2–15):**
+
+$$
+\mathrm{out}^t_i = t_d - \mathrm{in}^{(\mathrm{vio+nonvio}),t}_i - \text{childhood}.
+$$
 
 ### Calculations (refer to LaTeX section for formulas)
 
@@ -144,10 +161,12 @@ Values: `[0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.477, SKIPPED, SKIPPED, SKIPPE
   - `desc_vio_past = 2/2 = 1.000` (see Eq. **DESC-VIO-PAST**)
 
 - Severity trend:
-  - `severity_trend = ((1.000 − 1.000)/10.000 + 1)/2 = 0.500` (see Eq. **SEVERITY-TREND**)
+  - `severity_trend = 0.000` (Δv = 0.000, so severity trend is 0; see Eq. **SEVERITY-TREND**, `severity_trend = Δv * exp(-λ * T)`)
 
 - Frequency (per month outside):
-  - `time_outside_months = 0.000` → **SKIPPED** (requires `time_outside > 0` and bounds)  
+  - `violent_total = 3; total_conv = 3; time_outside = 0.000`
+  - `raw_freq_violent = NA; raw_freq_total = NA`
+  - `normalized: **SKIPPED** (requires `time_outside > 0` and `freq_min_rate`/`freq_max_rate`  
     (see Eqs. **FREQ-VIO**, **FREQ-TOTAL**)
 
 - Age (min–max):
@@ -155,10 +174,9 @@ Values: `[0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.477, SKIPPED, SKIPPED, SKIPPE
 
 ## Final Metric Vector (named)
 Order: `desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced`  
-Values: `[0.000, 0.000, 0.278, SKIPPED, SKIPPED, 0.500, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`
+Values: `[0.000, 0.000, 0.278, SKIPPED, SKIPPED, 0.000, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`
 
-**Score:** `0.167` (out of `3.000`) — **5.6% of maximum**  
-“Out-of” is computed as described in Eq. **OUT-OF**.  
+**Score:** `0.278` (out of `3.000`) — **9.3% of maximum**   
 **Contributing metrics:** `age, desc_nonvio_curr, desc_nonvio_past, severity_trend`
 
 ### Re‑generate these examples
@@ -195,12 +213,36 @@ $$
 = \frac{\mathrm{conv}^{\mathrm{vio}}_{i,t<t_d}}{\mathrm{conv}^{(\mathrm{vio+nonvio})}_{i,t<t_d}}
 $$
 
-- **Severity trend:**  
-  
+- **Severity trend (updated exponential form):**  
+
+We first define the change in violent share between past and current.
+Let $v_i^{\text{curr}}$ and $v_i^{\text{past}}$ be the current and past violent proportions for person $i$.
+
 $$
-severity_i^{\mathrm{trend},t_d}
-=\frac{\dfrac{\mathrm{desc}_i^{\mathrm{vio},t< t_d}-\mathrm{desc}_i^{\mathrm{vio},t_d}}{\text{years elapsed}}+1}{2},\qquad \in [0,1]
+\Delta v_i = \max\bigl(0, v_i^{\text{curr}} - v_i^{\text{past}}\bigr),
+\qquad \Delta v_i \in [0,1].
 $$
+
+Only **increases** in violent share are penalized (if the violent share does not increase, 
+Δv<sub>i</sub> = 0).
+
+Let \(\lambda > 0\) be the decay rate (configured as `SEVERITY_DECAY_RATE` in `config.py`), and let
+$T_i \ge 0$ be the time horizon in years (computed from first prior → last current commitment,
+optionally overridden by `DEFAULT_TIME_ELAPSED_YEARS`).
+
+The implemented severity trend is:
+
+$$
+\mathrm{severity\_trend}_i
+=\Delta v_i \cdot \exp\bigl(-\lambda \, T_i\bigr),
+\qquad \mathrm{severity\_trend}_i \in [0,1].
+$$
+
+Properties:
+
+- The **ideal value** is \(0\) (no recent worsening in severity).
+- Larger values correspond to **more recent increases** in violent share.
+- The exponential term down-weights very old changes.
 
 
 - **Frequency (per month outside; min–max normalize if bounds are set):**  
@@ -295,7 +337,7 @@ for uid in ids:
         weights=CFG.METRIC_WEIGHTS,
         directions=getattr(CFG, "METRIC_DIRECTIONS", {}),
         return_parts=True,
-    )  # score_ratio == (num / den) when den>0
+    )  # score_ratio == (num / den) when den > 0
 
     # NaN / “not evaluated” safe handling
     no_denom = (
@@ -315,18 +357,18 @@ for uid in ids:
         evaluated = 1
 
     # Optional: expose time_outside if present in aux
-    time_outside = aux.get("time_outside")
+    time_outside_months = aux.get("time_outside")
     pct_completed = aux.get("pct_completed")
 
     rows.append(
         {
             CFG.COLS["id"]: uid,
-            **feats,                # all computed named metrics
-            "score": num_safe,      # numerator (Σ w·m)
-            "score_out_of": den_safe,
+            **feats,                     # all computed named metrics
+            "score": num_safe,           # numerator (Σ w·m)
+            "score_out_of": den_safe,    # denominator (Σ w·x*)
             "score_ratio": score_ratio_safe,
-            "evaluated": evaluated,  # 1 = evaluated, 0 = not evaluable
-            "time_outside": time_outside,
+            "evaluated": evaluated,      # 1 = evaluated, 0 = not evaluable
+            "time_outside_months": time_outside_months,
             "pct_completed": pct_completed,
         }
     )
