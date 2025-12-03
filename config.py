@@ -18,7 +18,7 @@ PATHS_PROD = {
 PATHS_DEV = {
     "demographics":        r"D:\Judge_bias_detection\milestone_2\demographics.csv",
     "prior_commitments":   r"D:\Judge_bias_detection\milestone_2\prior_commitments.csv",
-    "current_commitments": r"D:\Judge_bias_detection\milestone_2\current_commitments.xlsx",
+    "current_commitments": r"D:\Judge_bias_detection\milestone_2\current_commitments.csv",
 }
 
 PATHS = PATHS_PROD if PROFILE == "PROD" else PATHS_DEV
