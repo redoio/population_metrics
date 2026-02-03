@@ -2,10 +2,16 @@
 # -*- coding: utf-8 -*-
 
 from __future__ import annotations
-import argparse, json, math
+
+import argparse
+import json
+import math
+import traceback
 from typing import Dict, Any, List, Optional
+
 import pandas as pd
 from tqdm import tqdm
+
 import config as CFG
 import sentencing_math as sm
 import compute_metrics as cm
@@ -24,12 +30,33 @@ def _flatten_counts(prefix: str, d: Dict[str, Any]) -> Dict[str, Any]:
 
 def _load_ids(ids_csv: Optional[str], demo: pd.DataFrame) -> List[str]:
     id_col = CFG.COLS["id"]
+    if demo is None or id_col not in demo.columns:
+        raise ValueError(
+            f"Demographics table is missing required id column '{id_col}'. "
+            f"Available columns: {list(demo.columns) if demo is not None else 'None'}"
+        )
+
     if ids_csv:
         df_ids = pd.read_csv(ids_csv)
         if id_col not in df_ids.columns:
             raise ValueError(f"--ids-csv must contain a column named '{id_col}' (from config.COLS['id']).")
         return df_ids[id_col].astype(str).dropna().unique().tolist()
+
     return demo[id_col].astype(str).dropna().unique().tolist()
+
+
+def _ensure_dense_metrics(feats: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    If CFG.METRIC_NAMES exists, ensure all metric columns appear (NaN if missing).
+    This makes population outputs schema-stable.
+    """
+    names = getattr(CFG, "METRIC_NAMES", None)
+    if not names:
+        return feats
+    out = dict(feats)
+    for k in names:
+        out.setdefault(k, math.nan)
+    return out
 
 
 def main():
@@ -39,19 +66,21 @@ def main():
     ap.add_argument("--ids-csv", default=None)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--include-aux", action="store_true")
+    ap.add_argument("--dense", action="store_true", help="Include all CFG.METRIC_NAMES columns (NaN if missing).")
     ap.add_argument("--print-every", type=int, default=0)
     ap.add_argument("--fail-fast", action="store_true")
+    ap.add_argument("--tracebacks", action="store_true", help="Include stack traces in the .errors.jsonl file.")
     args = ap.parse_args()
 
     # Load source tables
     demo = cm.read_table(CFG.PATHS["demographics"])
-    cur  = cm.read_table(CFG.PATHS["current_commitments"])
-    pri  = cm.read_table(CFG.PATHS["prior_commitments"])
+    cur = cm.read_table(CFG.PATHS["current_commitments"])
+    pri = cm.read_table(CFG.PATHS["prior_commitments"])
 
     # Policy knobs
-    lists       = getattr(CFG, "OFFENSE_LISTS", {"violent": [], "nonviolent": []})
-    weights     = getattr(CFG, "METRIC_WEIGHTS", getattr(CFG, "WEIGHTS", {}))
-    directions  = getattr(CFG, "METRIC_DIRECTIONS", {})
+    lists = getattr(CFG, "OFFENSE_LISTS", {"violent": [], "nonviolent": []})
+    weights = getattr(CFG, "METRIC_WEIGHTS", getattr(CFG, "WEIGHTS", {}))
+    directions = getattr(CFG, "METRIC_DIRECTIONS", {})
 
     # Who to run
     ids = _load_ids(args.ids_csv, demo)
@@ -67,6 +96,9 @@ def main():
         try:
             feats, aux = cm.compute_features(str(uid), demo, cur, pri, lists)
 
+            # Optional: stable schema (include NaNs for missing metrics)
+            feats_out = _ensure_dense_metrics(feats) if args.dense else feats
+
             # Final suitability as ratio + parts:
             #   numerator = w · m       (dot with actual metrics)
             #   denom     = w · x*      (dot with best-case vector)
@@ -77,7 +109,7 @@ def main():
                 return_parts=True,
             )
 
-            #  NaN/None/0 safe handling 
+            # NaN/None/0 safe handling
             no_denom = (
                 denom is None
                 or denom == 0
@@ -88,23 +120,22 @@ def main():
                 score_ratio_safe = math.nan
                 numerator_safe = math.nan
                 denom_safe = math.nan
-                evaluated_flag = 0  # "not evaluated / insufficient data"
+                evaluated_flag = 0  # not evaluated / insufficient data
                 score_pct_of_out = math.nan
             else:
                 score_ratio_safe = float(score_ratio)
                 numerator_safe = float(numerator)
                 denom_safe = float(denom)
-                evaluated_flag = 1  # "evaluated"
-                # <-- HERE is the NaN-safe percentage
+                evaluated_flag = 1  # evaluated
                 score_pct_of_out = (numerator_safe / denom_safe) * 100.0
 
             record: Dict[str, Any] = {
-                CFG.COLS["id"]: uid,
-                **feats,
+                CFG.COLS["id"]: str(uid),
+                **feats_out,
                 "score": numerator_safe,
                 "score_out_of": denom_safe,
                 "score_ratio": score_ratio_safe,
-                "score_pct_of_out": score_pct_of_out,  # NEW
+                "score_pct_of_out": score_pct_of_out,
                 "evaluated": evaluated_flag,
             }
 
@@ -122,18 +153,33 @@ def main():
         except Exception as e:
             if args.fail_fast:
                 raise
-            errors.append({CFG.COLS["id"]: uid, "error": f"{type(e).__name__}: {e}"})
+            err_rec: Dict[str, Any] = {
+                CFG.COLS["id"]: str(uid),
+                "error": f"{type(e).__name__}: {e}",
+            }
+            if args.tracebacks:
+                err_rec["traceback"] = traceback.format_exc()
+            errors.append(err_rec)
         finally:
             pbar.update(1)
     pbar.close()
 
     out_df = pd.DataFrame(rows)
 
-    # Put ID first
+    # Column ordering: id, metrics (if configured), score fields, then the rest
     id_col = CFG.COLS["id"]
-    cols = out_df.columns.tolist()
-    if id_col in cols:
-        out_df = out_df[[id_col] + [c for c in cols if c != id_col]]
+    metric_order = getattr(CFG, "METRIC_NAMES", [])
+    score_order = ["score_ratio", "score", "score_out_of", "score_pct_of_out", "evaluated"]
+
+    ordered: List[str] = []
+    for c in [id_col] + list(metric_order) + score_order:
+        if c in out_df.columns and c not in ordered:
+            ordered.append(c)
+    # append any remaining columns
+    for c in out_df.columns:
+        if c not in ordered:
+            ordered.append(c)
+    out_df = out_df[ordered] if not out_df.empty else out_df
 
     # Write
     out_fmt = (
@@ -156,7 +202,7 @@ def main():
                 f.write(json.dumps(rec) + "\n")
         print(f"Encountered {len(errors)} errors. Details → {err_path}")
 
-    # Preview a few key columns if present
+    # Preview
     if not out_df.empty:
         preferred = [id_col, "score_ratio", "score", "score_out_of", "score_pct_of_out", "evaluated"]
         extra = [c for c in out_df.columns if c not in preferred][:5]
