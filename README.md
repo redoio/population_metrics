@@ -1,9 +1,9 @@
-# Introduction
+# population_metrics
 Batch runner to compute **population-level sentencing metrics** and **suitability scores** for all individuals, writing a flat file (CSV/Parquet). The pipeline is strict about missing inputs:
 when nothing can be evaluated for a person, we emit NaNs instead of 0 so the case can be flagged,
 metrics are **skipped** when their prerequisites aren’t present (no fabricated values). Metrics are **named and extensible**; new metrics can be added without changing positional order.
 
-## Contents
+## Repo contents
 - `config.py` — Paths (DEV/PROD), column map (`COLS`), defaults (`DEFAULTS`), offense lists (`OFFENSE_LISTS`), and metric weights (`METRIC_WEIGHTS`).
 - `compute_metrics.py` — Library functions to read raw tables and compute **named features** for a single ID (skip-if-missing).
 - `sentencing_math.py` — Pure math (no I/O): time decomposition, proportions, frequency/trend, rehab, and name-based suitability.
@@ -63,38 +63,38 @@ This allows downstream tools to tell “not evaluated / insufficient data” apa
 - Errors (if any): `*.errors.jsonl` with `{id, error}` records.
 - Console preview prints the first rows/columns for a quick check.
 
-## Worked Examples
+## Worked examples (from scratch)
 These examples walk through **exactly** what the pipeline computes for a specific ID: counts → denominators → proportions → time pieces → trend/frequency → named vector → suitability. The LaTeX below **matches the paper** notation.
 
-### Example 1
-**CDCR ID:** `00173d8423`<br>
+# Worked Example (REAL DATA)
 
+**CDCR ID:** `00173d8423`
 **Offense Lists (active for this run)**
 - Violent: `['187', '211', '245']`
 - Nonviolent: `['459', '484', '10851']`
 
-#### Inputs
+## Inputs
 - Current offense rows found: **11**
 - Prior offense rows found: **6**
 
-#### Counts by Category
+### Counts by Category
 - Current: {'violent': 1, 'nonviolent': 1, 'other': 9, 'clash': 0}
 - Prior:   {'violent': 0, 'nonviolent': 4, 'other': 2, 'clash': 0}
 
-#### Time Pieces
-- `current_sentence_months` = 10000.000
-- `completed_months` = 330.000
-- `past_time_months` = NA 
-- `pct_current_completed` = 3.300
-- `time_outside_months` = 0.000
+### Time Pieces
+- current_sentence_months = 10000.000
+- completed_months = 330.000
+- past_time_months = NA 
+- pct_current_completed = 3.300
+- time_outside_months = 0.000
 
-**Definition:**
+**Paper definition (Eq. B.2–15):**
 
 $$
 \mathrm{out}^t_i = t_d - \mathrm{in}^{(\mathrm{vio+nonvio}),t}_i - \text{childhood}.
 $$
 
-#### Calculations
+### Calculations (refer to LaTeX section for formulas)
 
 - `desc_nonvio_curr = 1/2 = 0.500` (see Eq. **DESC-NONVIO-CURR**)
 - `desc_nonvio_past = 4/4 = 1.000` (see Eq. **DESC-NONVIO-PAST**)
@@ -108,13 +108,13 @@ $$
 
 - Frequency (per month outside):
   - `raw_freq_violent = NA; raw_freq_total = NA`
-  - `normalized: **SKIPPED**` (requires `time_outside > 0`, `freq_min_rate` and `freq_max_rate`)
+    `normalized: **SKIPPED** (requires `time_outside > 0` and `freq_min_rate`/`freq_max_rate`  
      (see Eqs. **FREQ-VIO**, **FREQ-TOTAL**)
 
 - Age (min–max):
   - `age_raw = 38.000`, `min = 18.000`, `max = 90.000` → `age = 0.278` (see Eq. **AGE-NORM**)
 
-#### Final Metric Vector
+## Final Metric Vector (named)
 Order: `desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced`  
 Values: `[0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.112, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`
 
@@ -123,35 +123,35 @@ Values: `[0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.112, SKIPPED, SKIPPED, SKIPPE
 
 
 ### Example 2 
-**CDCR ID:** `0029029e5b`<br>
+**CDCR ID:** `0029029e5b`
 
 **Offense Lists (active for this run)**
 - Violent: `['187', '211', '245']`
 - Nonviolent: `['459', '484', '10851']`
 
-#### Inputs
+## Inputs
 - Current offense rows found: **1**
 - Prior offense rows found: **2**
 
-#### Counts by Category
+### Counts by Category
 - Current: {'violent': 1, 'nonviolent': 0, 'other': 0, 'clash': 0}
 - Prior:   {'violent': 2, 'nonviolent': 0, 'other': 0, 'clash': 0}
 
 
-#### Time Pieces
-- `current_sentence_months` = 84.000
-- `completed_months` = 67.200
-- `past_time_months` = NA
-- `pct_current_completed` = 80.000
-- `time_outside_months` = 0.000
+### Time Pieces
+- current_sentence_months = 84.000
+- completed_months = 67.200
+- past_time_months = NA
+- pct_current_completed = 80.000
+- time_outside_months = 0.000
 
-**Definition:**
+**Paper definition (Eq. B.2–15):**
 
 $$
 \mathrm{out}^t_i = t_d - \mathrm{in}^{(\mathrm{vio+nonvio}),t}_i - \text{childhood}.
 $$
 
-#### Calculations
+### Calculations (refer to LaTeX section for formulas)
 
 - `desc_nonvio_curr = 0/1 = 0.000` (see Eq. **DESC-NONVIO-CURR**)
 - `desc_nonvio_past = 0/2 = 0.000` (see Eq. **DESC-NONVIO-PAST**)
@@ -166,20 +166,20 @@ $$
 - Frequency (per month outside):
   - `violent_total = 3; total_conv = 3; time_outside = 0.000`
   - `raw_freq_violent = NA; raw_freq_total = NA`
-  - `normalized: **SKIPPED**` (requires `time_outside > 0`, `freq_min_rate` and `freq_max_rate`)
+  - `normalized: **SKIPPED** (requires `time_outside > 0` and `freq_min_rate`/`freq_max_rate`  
     (see Eqs. **FREQ-VIO**, **FREQ-TOTAL**)
 
 - Age (min–max):
   - `age_raw = 38.000`, `min = 18.000`, `max = 90.000` → `age = 0.278` (see Eq. **AGE-NORM**)
 
-#### Final Metric Vector
+## Final Metric Vector (named)
 Order: `desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced`  
 Values: `[0.000, 0.000, 0.278, SKIPPED, SKIPPED, 0.000, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`
 
 **Score:** `0.278` (out of `3.000`) — **9.3% of maximum**   
 **Contributing metrics:** `age, desc_nonvio_curr, desc_nonvio_past, severity_trend`
 
-### Re‑generate Examples
+### Re‑generate these examples
 **macOS/Linux**
 ```bash
 CFG_PROFILE=DEV python docs_1/make_worked_example.py --uid "0029029e5b" --violent "187,211,245" --nonviolent "459,484,10851" --age-years 38 --exposure-months 480 --freq-bounds "0,0.05" --out docs_1/README_worked_example_0029029e5b.md
@@ -192,7 +192,7 @@ python docs_1\make_worked_example.py --uid "0029029e5b" --violent "187,211,245" 
 python docs_1\make_worked_example.py --uid "00173d8423" --violent "187,211,245" --nonviolent "459,484,10851" --age-years 38 --exposure-months 480 --freq-bounds "0,0.05" --out "docs_1\README_worked_example_00173d8423.md"
 ```
 
-## Formulas Implemented
+## Formulas implemented (LaTeX)
 - **Descriptive proportions:**
 
 $$
@@ -303,7 +303,7 @@ and `x_k* = 0` for `d_k = −1` (negative-direction metrics).
 > • Frequency requires **both** `time_outside > 0` **and** configured `freq_min_rate`/`freq_max_rate`.  
 > • Rehab/education are per‑month‑inside, then min–max normalized **only if** inputs and bounds are provided; otherwise **omitted**.
 
-## Validation Checklist
+## Validation checklist
 - Proportion metrics are computed **only** when denominators \(> 0\); otherwise the metric is **SKIPPED**.
 - Frequency requires **both** `time_outside > 0` **and** `freq_min_rate`/`freq_max_rate` in `config.py`.
 - Offense classification uses only `OFFENSE_LISTS`; anything unlisted → **other** (and does not contribute to denominators).
@@ -311,8 +311,7 @@ and `x_k* = 0` for `d_k = −1` (negative-direction metrics).
 - When comparing individuals (similarity), compute on the **intersection of present features** and require a minimum shared‑dimension count (e.g., ≥3). Consider also Euclidean or Tanimoto for sensitivity analysis.
 - If no metrics pass the gating (denominators 0, missing exposure, missing age, etc.), the scorer returns NaN (or None, depending on runner) and sets evaluated = 0. This is intentional and we do not fabricate zeros for unevaluable people.
 
-## Programmatic Example
-```python
+## Programmatic example
 import math
 import config as CFG
 import compute_metrics as cm
@@ -329,7 +328,8 @@ ids = demo[CFG.COLS["id"]].astype(str).dropna().unique().tolist()[:3]
 
 rows = []
 for uid in ids:
-    feats, aux = cm.compute_features(uid, demo, cur, pri, CFG.OFFENSE_LISTS)
+    feats, aux = cm.compute_features(str(uid), demo, cur, pri, CFG.OFFENSE_LISTS)
+    # NOTE: feats is "skip-if-missing" — it may not contain every metric in CFG.METRIC_NAMES
 
     # name-based suitability; may return NaN/None if no evaluable metrics
     score_ratio, num, den = sm.suitability_score_named(
@@ -349,25 +349,28 @@ for uid in ids:
         score_ratio_safe = math.nan
         num_safe = math.nan
         den_safe = math.nan
+        score_pct_of_out = math.nan
         evaluated = 0
     else:
         score_ratio_safe = float(score_ratio)
         num_safe = float(num)
         den_safe = float(den)
+        score_pct_of_out = (num_safe / den_safe) * 100.0
         evaluated = 1
 
-    # Optional: expose time_outside if present in aux
+    # Optional: expose aux fields if present
     time_outside_months = aux.get("time_outside")
     pct_completed = aux.get("pct_completed")
 
     rows.append(
         {
-            CFG.COLS["id"]: uid,
-            **feats,                     # all computed named metrics
-            "score": num_safe,           # numerator (Σ w·m)
-            "score_out_of": den_safe,    # denominator (Σ w·x*)
+            CFG.COLS["id"]: str(uid),
+            **feats,                      # computed named metrics (may be a subset)
+            "score": num_safe,            # numerator (Σ w·m)
+            "score_out_of": den_safe,     # denominator (Σ w·x*)
             "score_ratio": score_ratio_safe,
-            "evaluated": evaluated,      # 1 = evaluated, 0 = not evaluable
+            "score_pct_of_out": score_pct_of_out,
+            "evaluated": evaluated,       # 1 = evaluated, 0 = not evaluable
             "time_outside_months": time_outside_months,
             "pct_completed": pct_completed,
         }
@@ -375,6 +378,7 @@ for uid in ids:
 
 df = pd.DataFrame(rows)
 print(df.head())
+
 ```
 
 ## Troubleshooting
