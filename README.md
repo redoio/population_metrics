@@ -1,4 +1,4 @@
-# population_metrics
+# Introduction
 Batch runner to compute **population-level sentencing metrics** and **suitability scores** for all individuals, writing a flat file (CSV/Parquet). The pipeline is strict about missing inputs:
 when nothing can be evaluated for a person, we emit NaNs instead of 0 so the case can be flagged,
 metrics are **skipped** when their prerequisites aren’t present (no fabricated values). Metrics are **named and extensible**; new metrics can be added without changing positional order.
@@ -63,17 +63,17 @@ This allows downstream tools to tell “not evaluated / insufficient data” apa
 - Errors (if any): `*.errors.jsonl` with `{id, error}` records.
 - Console preview prints the first rows/columns for a quick check.
 
-## Worked examples (from scratch)
+## Worked examples
 These examples walk through **exactly** what the pipeline computes for a specific ID: counts → denominators → proportions → time pieces → trend/frequency → named vector → suitability. The LaTeX below **matches the paper** notation.
 
-# Worked Example (REAL DATA)
+### Example 1
 
 **CDCR ID:** `00173d8423`
-**Offense Lists (active for this run)**
+**Offense lists (active for this run)**
 - Violent: `['187', '211', '245']`
 - Nonviolent: `['459', '484', '10851']`
 
-## Inputs
+### Inputs
 - Current offense rows found: **11**
 - Prior offense rows found: **6**
 
@@ -94,7 +94,7 @@ $$
 \mathrm{out}^t_i = t_d - \mathrm{in}^{(\mathrm{vio+nonvio}),t}_i - \text{childhood}.
 $$
 
-### Calculations (refer to LaTeX section for formulas)
+### Calculations
 
 - `desc_nonvio_curr = 1/2 = 0.500` (see Eq. **DESC-NONVIO-CURR**)
 - `desc_nonvio_past = 4/4 = 1.000` (see Eq. **DESC-NONVIO-PAST**)
@@ -114,7 +114,7 @@ $$
 - Age (min–max):
   - `age_raw = 38.000`, `min = 18.000`, `max = 90.000` → `age = 0.278` (see Eq. **AGE-NORM**)
 
-## Final Metric Vector (named)
+### Final Metric Vector (named)
 Order: `desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced`  
 Values: `[0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.112, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`
 
@@ -129,7 +129,7 @@ Values: `[0.500, 1.000, 0.278, SKIPPED, SKIPPED, 0.112, SKIPPED, SKIPPED, SKIPPE
 - Violent: `['187', '211', '245']`
 - Nonviolent: `['459', '484', '10851']`
 
-## Inputs
+### Inputs
 - Current offense rows found: **1**
 - Prior offense rows found: **2**
 
@@ -172,7 +172,7 @@ $$
 - Age (min–max):
   - `age_raw = 38.000`, `min = 18.000`, `max = 90.000` → `age = 0.278` (see Eq. **AGE-NORM**)
 
-## Final Metric Vector (named)
+### Final Metric Vector (named)
 Order: `desc_nonvio_curr, desc_nonvio_past, age, freq_violent, freq_total, severity_trend, edu_general, edu_advanced, rehab_general, rehab_advanced`  
 Values: `[0.000, 0.000, 0.278, SKIPPED, SKIPPED, 0.000, SKIPPED, SKIPPED, SKIPPED, SKIPPED]`
 
@@ -192,7 +192,7 @@ python docs_1\make_worked_example.py --uid "0029029e5b" --violent "187,211,245" 
 python docs_1\make_worked_example.py --uid "00173d8423" --violent "187,211,245" --nonviolent "459,484,10851" --age-years 38 --exposure-months 480 --freq-bounds "0,0.05" --out "docs_1\README_worked_example_00173d8423.md"
 ```
 
-## Formulas implemented (LaTeX)
+## Formulas implemented
 - **Descriptive proportions:**
 
 $$
@@ -310,82 +310,3 @@ and `x_k* = 0` for `d_k = −1` (negative-direction metrics).
 - Suitability uses **only present (gated)** features with explicit `METRIC_WEIGHTS` (no hidden zero‑weights).
 - When comparing individuals (similarity), compute on the **intersection of present features** and require a minimum shared‑dimension count (e.g., ≥3). Consider also Euclidean or Tanimoto for sensitivity analysis.
 - If no metrics pass the gating (denominators 0, missing exposure, missing age, etc.), the scorer returns NaN (or None, depending on runner) and sets evaluated = 0. This is intentional and we do not fabricate zeros for unevaluable people.
-
-## Programmatic example
-import math
-import config as CFG
-import compute_metrics as cm
-import sentencing_math as sm
-import pandas as pd
-
-# load source tables
-demo = cm.read_table(CFG.PATHS["demographics"])
-cur  = cm.read_table(CFG.PATHS["current_commitments"])
-pri  = cm.read_table(CFG.PATHS["prior_commitments"])
-
-# take a few IDs for the demo
-ids = demo[CFG.COLS["id"]].astype(str).dropna().unique().tolist()[:3]
-
-rows = []
-for uid in ids:
-    feats, aux = cm.compute_features(str(uid), demo, cur, pri, CFG.OFFENSE_LISTS)
-    # NOTE: feats is "skip-if-missing" — it may not contain every metric in CFG.METRIC_NAMES
-
-    # name-based suitability; may return NaN/None if no evaluable metrics
-    score_ratio, num, den = sm.suitability_score_named(
-        feats,
-        weights=CFG.METRIC_WEIGHTS,
-        directions=getattr(CFG, "METRIC_DIRECTIONS", {}),
-        return_parts=True,
-    )  # score_ratio == (num / den) when den > 0
-
-    # NaN / “not evaluated” safe handling
-    no_denom = (
-        den is None
-        or den == 0
-        or (isinstance(den, float) and math.isnan(den))
-    )
-    if no_denom:
-        score_ratio_safe = math.nan
-        num_safe = math.nan
-        den_safe = math.nan
-        score_pct_of_out = math.nan
-        evaluated = 0
-    else:
-        score_ratio_safe = float(score_ratio)
-        num_safe = float(num)
-        den_safe = float(den)
-        score_pct_of_out = (num_safe / den_safe) * 100.0
-        evaluated = 1
-
-    # Optional: expose aux fields if present
-    time_outside_months = aux.get("time_outside")
-    pct_completed = aux.get("pct_completed")
-
-    rows.append(
-        {
-            CFG.COLS["id"]: str(uid),
-            **feats,                      # computed named metrics (may be a subset)
-            "score": num_safe,            # numerator (Σ w·m)
-            "score_out_of": den_safe,     # denominator (Σ w·x*)
-            "score_ratio": score_ratio_safe,
-            "score_pct_of_out": score_pct_of_out,
-            "evaluated": evaluated,       # 1 = evaluated, 0 = not evaluable
-            "time_outside_months": time_outside_months,
-            "pct_completed": pct_completed,
-        }
-    )
-
-df = pd.DataFrame(rows)
-print(df.head())
-
-```
-
-## Troubleshooting
-- **No computable features**: verify `COLS` names and required time fields in `DEFAULTS['require_time_fields']`.
-- **All similarities/metrics look constant**: set meaningful `freq_min_rate`/`freq_max_rate` and ensure exposure window is computed.
-- **XLSX read errors**: `pip install openpyxl`.
-- **Parquet write errors**: `pip install pyarrow`.
-
-## License
-MIT
